@@ -312,3 +312,37 @@ fn prop_sub_threshold_deposits_accumulate_until_distributable() {
         assert_eq!(s.client.get_balance(&project_id), 0, "seed={seed}");
     });
 }
+
+#[test]
+fn prop_fuzz_amount_and_allocation_boundaries() {
+    for_each_case(|seed, rng| {
+        let env = Env::default();
+        let s = Scenario::new(&env);
+
+        // Fuzz allocation boundary: 2 collaborators splitting 10,000 basis points across extreme shares
+        let c1_bps = rng.range(1, 9999) as u32;
+        let c2_bps = 10_000 - c1_bps;
+
+        let a1 = Address::generate(&env);
+        let a2 = Address::generate(&env);
+
+        let mut collabs = Vec::new(&env);
+        collabs.push_back(Collaborator { address: a1.clone(), share_bps: c1_bps });
+        collabs.push_back(Collaborator { address: a2.clone(), share_bps: c2_bps });
+
+        let project_id = s.create("fuzz_boundary", &collabs);
+        let funder = Address::generate(&env);
+
+        // Fuzz extreme amount bounds
+        let fuzzed_amount = rng.range(1, 5_000_000_000_000) as i128;
+        s.deposit(&project_id, &funder, fuzzed_amount);
+
+        assert_eq!(s.client.get_balance(&project_id), fuzzed_amount, "seed={seed}");
+        s.client.distribute(&project_id);
+
+        // Verify full liquidation and zero remainder leakage
+        assert_eq!(s.client.get_balance(&project_id), 0, "seed={seed}");
+        let project = s.client.get_project(&project_id).unwrap();
+        assert_eq!(project.total_distributed, fuzzed_amount, "seed={seed}");
+    });
+}
