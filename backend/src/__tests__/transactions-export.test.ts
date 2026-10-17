@@ -40,6 +40,14 @@ vi.mock("../services/database.js", () => ({
   closeDatabase: async () => {},
 }));
 
+// Session revocation (#1446) is covered in session-revocation.test.ts; these
+// tests only need tokens at the current (default) version.
+vi.mock("../services/session-revocation.js", () => ({
+  getSessionVersion: vi.fn(async () => 0),
+  getMaxSessionVersionForEmail: vi.fn(async () => 0),
+  revokeSessionsForEmail: vi.fn(async () => 1),
+}));
+
 import { app } from "../index.js";
 import { signToken } from "../services/jwt.js";
 

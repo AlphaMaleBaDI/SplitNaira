@@ -29,6 +29,9 @@ Related docs:
 | READ_CACHE_TTL_MS | Backend/Performance | dev, staging, prod (optional) | Public | Cache tuning |
 | READ_CACHE_MAX_ENTRIES | Backend/Performance | dev, staging, prod (optional) | Public | Cache tuning |
 | DATABASE_POOL_MAX | Backend/Performance | dev, staging, prod (optional) | Public | DB connection pool size |
+| EMAIL_VERIFICATION_RESEND_COOLDOWN_MS | Backend/Auth | dev, staging, prod (optional) | Public | Per-email wait between verification email sends. Defaults to `60000`; invalid or non-positive values fall back to the default. See `auth-email-flows.md` |
+| EMAIL_VERIFICATION_TOKEN_TTL | Backend/Auth | dev, staging, prod (optional) | Public | Lifetime of email verification links. Defaults to `24h` |
+| EMAIL_VERIFICATION_URL_BASE | Backend/Auth | staging, prod (optional) | Public | Frontend page the verification link points to. Defaults to `https://app.splitnaira.com/verify-email` |
 
 ## Secret vs Public Config
 

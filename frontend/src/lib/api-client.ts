@@ -280,15 +280,25 @@ export class ApiClient {
     }
   }
 
+  /**
+   * `idempotencyKey` (#1266) is sent as `Idempotency-Key`. Reusing it for a
+   * retry of the same payload makes the backend replay the original response
+   * instead of building again, which also makes the automatic 5xx retries in
+   * `requestJson` safe. A different payload with the same key gets a 409
+   * `idempotency_key_conflict`.
+   */
   async buildCreateSplitXdr(
     payload: CreateSplitPayload,
+    options: { idempotencyKey?: string } = {},
   ): Promise<BuildSplitResponse> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
     return this.requestJson<BuildSplitResponse>(
       "/splits",
       "Failed to build split transaction",
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(payload),
       },
     );

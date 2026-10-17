@@ -40,6 +40,17 @@ export class User {
   @Column({ type: "timestamptz", nullable: true })
   deletedAt!: Date | null;
 
+  /**
+   * Incremented to invalidate every outstanding wallet JWT for this user
+   * (#1446). Tokens carry it as the `sv` claim; see `services/session-revocation.ts`.
+   */
+  @Column({ type: "integer", default: 0 })
+  sessionVersion!: number;
+
+  /** When the user confirmed their email address (#1443). Null = unverified. */
+  @Column({ type: "timestamptz", nullable: true })
+  emailVerifiedAt!: Date | null;
+
   @CreateDateColumn({ type: "timestamp" })
   createdAt!: Date;
 

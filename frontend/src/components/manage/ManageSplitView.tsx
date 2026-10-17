@@ -43,6 +43,8 @@ interface ManageSplitViewProps {
   projectFetchError: string | null;
   isProjectStale: boolean;
   setShowDistributeModal: (val: boolean) => void;
+  /** Opens the deposit modal. The entry point was lost in an earlier refactor (restored in #1266). */
+  setShowDepositModal?: (val: boolean) => void;
   adminStatus: AdminStatusState | null;
   receipt: TransactionReceipt | null;
   // Null for an unsupported network (#1114); the history row falls back to an
@@ -75,6 +77,7 @@ export function ManageSplitView({
   projectFetchError,
   isProjectStale,
   setShowDistributeModal,
+  setShowDepositModal,
   adminStatus,
   receipt,
   getExplorerUrl,
@@ -335,6 +338,16 @@ export function ManageSplitView({
                   </div>
                 )}
               </div>
+              {setShowDepositModal && (
+                <button
+                  type="button"
+                  onClick={() => setShowDepositModal(true)}
+                  disabled={!wallet.connected || sorobanSplitFlowBusy}
+                  className="premium-button w-full rounded-2xl bg-goldLight py-6 text-xs font-black uppercase tracking-[0.3em] text-[#0a0a09] shadow-xl shadow-goldLight/20 disabled:opacity-10 disabled:bg-white"
+                >
+                  Deposit Funds
+                </button>
+              )}
               <button
                 onClick={() => setShowDistributeModal(true)}
                 disabled={

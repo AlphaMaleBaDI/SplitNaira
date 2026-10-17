@@ -1,5 +1,5 @@
 /// <reference types="@testing-library/jest-dom" />
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   mockBuildDisallowTokenXdr: vi.fn(),
   mockSendTransaction: vi.fn(),
   mockPollTransaction: vi.fn(),
+  mockGetTransaction: vi.fn(),
   mockUseMaintenanceStatus: vi.fn()
 }));
 
@@ -46,7 +47,8 @@ vi.mock("@/hooks/useMaintenanceStatus", () => ({
 vi.mock("@/lib/wallet", () => {
   const mockRpc = () => ({
     sendTransaction: mocks.mockSendTransaction,
-    pollTransaction: mocks.mockPollTransaction
+    pollTransaction: mocks.mockPollTransaction,
+    getTransaction: mocks.mockGetTransaction
   });
   return {
     getWalletState: mocks.mockGetWalletState,
@@ -902,5 +904,297 @@ describe("SplitApp UX — optimistic metadata (#322)", () => {
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     expect(await screen.findByText("Renamed Project")).toBeTruthy();
+  });
+});
+
+// ============================================================
+//  #1266 — Duplicate payment submission protection
+// ============================================================
+
+describe("#1266 duplicate payment submission protection", () => {
+  const buildResponse = (xdr: string) => ({
+    xdr,
+    metadata: { networkPassphrase: "TESTNET", contractId: "CID" }
+  });
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.mockUseWallet.mockReturnValue({
+      wallet: { connected: true, address: "GOWNER123", network: "testnet" },
+      connect: vi.fn(),
+      refresh: vi.fn()
+    });
+    mocks.mockGetWalletState.mockResolvedValue({
+      connected: true,
+      address: "GOWNER123",
+      network: "testnet"
+    });
+    mocks.mockGetAllSplits.mockResolvedValue([]);
+    mocks.mockGetClaimable.mockResolvedValue({ claimed: "0", distributionRound: 0 });
+    mocks.mockGetProjectHistory.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.mockGetTokenAllowlist.mockResolvedValue(baseAllowlist);
+    mocks.mockGetSplit.mockResolvedValue({ ...baseProject, balance: "5000" });
+    mocks.mockSignWithWallet.mockResolvedValue("SIGNED_XDR");
+    mocks.mockBuildDistributeXdr.mockResolvedValue(buildResponse("DISTRIBUTE_XDR"));
+    mocks.mockBuildDepositXdr.mockResolvedValue(buildResponse("DEPOSIT_XDR"));
+    mocks.mockBuildCreateSplitXdr.mockResolvedValue(buildResponse("CREATE_XDR"));
+    mocks.mockSendTransaction.mockResolvedValue({ status: "PENDING", hash: "TX_HASH" });
+    mocks.mockPollTransaction.mockResolvedValue({ status: "SUCCESS" });
+  });
+
+  async function openDeposit(amount = "10") {
+    const user = await loadProject();
+    await user.click(screen.getByRole("button", { name: "Deposit Funds" }));
+    const dialog = screen.getByRole("dialog", { name: "Deposit Funds" });
+    await user.type(within(dialog).getByLabelText(/Amount \(in tokens\)/i), amount);
+    return { user, dialog };
+  }
+
+  it("starts only one payout when Execute Payout is clicked twice before re-rendering", async () => {
+    const pending = deferred<ReturnType<typeof buildResponse>>();
+    mocks.mockBuildDistributeXdr.mockReturnValue(pending.promise);
+
+    const user = await loadProject();
+    await user.click(screen.getByRole("button", { name: "Trigger Distribution" }));
+    const payout = screen.getByRole("button", { name: "Execute Payout" });
+
+    // Two synchronous clicks: no render happens in between, so the button's
+    // `disabled` attribute can't be what stops the second one.
+    act(() => {
+      fireEvent.click(payout);
+      fireEvent.click(payout);
+    });
+
+    await act(async () => pending.resolve(buildResponse("DISTRIBUTE_XDR")));
+    await waitFor(() => expect(mocks.mockSendTransaction).toHaveBeenCalledTimes(1));
+    expect(mocks.mockBuildDistributeXdr).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits only one deposit when Confirm Deposit is clicked twice before re-rendering", async () => {
+    const pending = deferred<ReturnType<typeof buildResponse>>();
+    mocks.mockBuildDepositXdr.mockReturnValue(pending.promise);
+    const { dialog } = await openDeposit();
+    const confirm = within(dialog).getByRole("button", { name: "Confirm Deposit" });
+
+    act(() => {
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+    });
+    expect(confirm).toHaveAttribute("aria-busy", "true");
+
+    await act(async () => pending.resolve(buildResponse("DEPOSIT_XDR")));
+    await waitFor(() => expect(mocks.mockSendTransaction).toHaveBeenCalledTimes(1));
+    expect(mocks.mockBuildDepositXdr).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores Confirm Deposit after a definitive failure so the user can retry", async () => {
+    mocks.mockSignWithWallet.mockRejectedValueOnce(new Error("User rejected the request"));
+    const { user, dialog } = await openDeposit();
+
+    await user.click(within(dialog).getByRole("button", { name: "Confirm Deposit" }));
+    await waitFor(() => expect(mocks.mockSignWithWallet).toHaveBeenCalledTimes(1));
+
+    const confirm = await within(dialog).findByRole("button", { name: "Confirm Deposit" });
+    await waitFor(() => expect(confirm).not.toBeDisabled());
+
+    await user.click(confirm);
+    await waitFor(() => expect(mocks.mockBuildDepositXdr).toHaveBeenCalledTimes(2));
+    expect(mocks.mockSendTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a deposit blocked while its transaction is unconfirmed, until Check status resolves it", async () => {
+    mocks.mockPollTransaction.mockRejectedValueOnce(
+      Object.assign(new Error("Transaction was submitted but not confirmed in time."), { name: "TimeoutError" })
+    );
+    const { user, dialog } = await openDeposit();
+
+    await user.click(within(dialog).getByRole("button", { name: "Confirm Deposit" }));
+    expect(await screen.findByRole("heading", { name: "Waiting for network confirmation" })).toBeTruthy();
+
+    const confirm = within(dialog).getByRole("button", { name: "Confirm Deposit" });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(mocks.mockBuildDepositXdr).toHaveBeenCalledTimes(1);
+
+    // Still not found and inside the validity window: stays blocked.
+    mocks.mockGetTransaction.mockResolvedValueOnce({ status: "NOT_FOUND" });
+    await user.click(screen.getByRole("button", { name: "Check status" }));
+    await waitFor(() => expect(mocks.mockGetTransaction).toHaveBeenCalledWith("TX_HASH"));
+    expect(screen.getByRole("heading", { name: "Waiting for network confirmation" })).toBeTruthy();
+    expect(confirm).toBeDisabled();
+
+    // The ledger reports a definitive outcome: unblocked.
+    mocks.mockGetTransaction.mockResolvedValueOnce({ status: "SUCCESS" });
+    await user.click(screen.getByRole("button", { name: "Check status" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Waiting for network confirmation" })).toBeNull()
+    );
+  });
+
+  it("warns before leaving the page while a payout is in flight", async () => {
+    const pending = deferred<ReturnType<typeof buildResponse>>();
+    mocks.mockBuildDistributeXdr.mockReturnValue(pending.promise);
+    const user = await loadProject();
+    await user.click(screen.getByRole("button", { name: "Trigger Distribution" }));
+    await user.click(screen.getByRole("button", { name: "Execute Payout" }));
+
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+
+    await act(async () => pending.resolve(buildResponse("DISTRIBUTE_XDR")));
+  });
+
+  describe("create split idempotency keys", () => {
+    async function fillCreateForm() {
+      const user = userEvent.setup();
+      renderSplitApp();
+      await user.click(screen.getByRole("button", { name: "Create" }));
+      await user.type(screen.getByLabelText("Project Identifier"), "idem_project");
+      await user.type(screen.getByLabelText("Display Title"), "Idem Project");
+      await user.selectOptions(screen.getByLabelText(/Asset token/i), "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVHUBXNIHG3DBJ4F3CHWIQY2OJ5G");
+      await user.type(screen.getByPlaceholderText("Recipient #1"), "GCOLLAB1");
+      await user.type(screen.getByPlaceholderText("Recipient #2"), "GCOLLAB2");
+      const aliases = screen.getAllByPlaceholderText("e.g. Lead Vocals");
+      await user.type(aliases[0], "Lead");
+      await user.type(aliases[1], "Producer");
+      return user;
+    }
+
+    const keyOfCall = (n: number) =>
+      (mocks.mockBuildCreateSplitXdr.mock.calls[n]?.[1] as { idempotencyKey?: string } | undefined)
+        ?.idempotencyKey;
+
+    it("reuses the key when retrying after a failure before submission, and rotates it once a transaction was submitted", async () => {
+      // 1st attempt: wallet rejects (nothing reached the network).
+      mocks.mockSignWithWallet.mockRejectedValueOnce(new Error("User rejected the request"));
+      // 2nd attempt: submitted, then failed on ledger (sequence number spent).
+      mocks.mockPollTransaction.mockResolvedValueOnce({ status: "FAILED" });
+
+      const user = await fillCreateForm();
+      await user.click(screen.getByRole("button", { name: /create split project/i }));
+      await waitFor(() => expect(mocks.mockBuildCreateSplitXdr).toHaveBeenCalledTimes(1));
+
+      await user.click(await screen.findByRole("button", { name: "Retry Submission" }));
+      await waitFor(() => expect(mocks.mockBuildCreateSplitXdr).toHaveBeenCalledTimes(2));
+
+      await user.click(await screen.findByRole("button", { name: "Retry Submission" }));
+      await waitFor(() => expect(mocks.mockBuildCreateSplitXdr).toHaveBeenCalledTimes(3));
+
+      expect(keyOfCall(0)).toEqual(expect.any(String));
+      expect(keyOfCall(1)).toBe(keyOfCall(0));
+      expect(keyOfCall(2)).not.toBe(keyOfCall(1));
+    });
+
+    it("starts only one create when the form is submitted twice before re-rendering", async () => {
+      const pending = deferred<ReturnType<typeof buildResponse>>();
+      mocks.mockBuildCreateSplitXdr.mockReturnValue(pending.promise);
+      const user = await fillCreateForm();
+      const submit = screen.getByRole("button", { name: /create split project/i });
+      await waitFor(() => expect(submit).toHaveAttribute("aria-disabled", "false"));
+
+      await act(async () => {
+        fireEvent.submit(submit.closest("form")!);
+        fireEvent.submit(submit.closest("form")!);
+      });
+      await act(async () => pending.resolve(buildResponse("CREATE_XDR")));
+
+      await waitFor(() => expect(mocks.mockSendTransaction).toHaveBeenCalledTimes(1));
+      expect(mocks.mockBuildCreateSplitXdr).toHaveBeenCalledTimes(1);
+      void user;
+    });
+  });
+});
+
+// ============================================================
+//  #1267 — Accessible errors on the deposit (payment) form
+// ============================================================
+
+describe("#1267 deposit form accessible errors", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.mockUseWallet.mockReturnValue({
+      wallet: { connected: true, address: "GOWNER123", network: "testnet" },
+      connect: vi.fn(),
+      refresh: vi.fn()
+    });
+    mocks.mockGetWalletState.mockResolvedValue({ connected: true, address: "GOWNER123", network: "testnet" });
+    mocks.mockGetAllSplits.mockResolvedValue([]);
+    mocks.mockGetClaimable.mockResolvedValue({ claimed: "0", distributionRound: 0 });
+    mocks.mockGetProjectHistory.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.mockGetTokenAllowlist.mockResolvedValue(baseAllowlist);
+    mocks.mockGetSplit.mockResolvedValue(baseProject);
+    mocks.mockSignWithWallet.mockResolvedValue("SIGNED_XDR");
+    mocks.mockBuildDepositXdr.mockResolvedValue({
+      xdr: "DEPOSIT_XDR",
+      metadata: { networkPassphrase: "TESTNET", contractId: "CID" }
+    });
+    mocks.mockSendTransaction.mockResolvedValue({ status: "PENDING", hash: "TX_HASH" });
+    mocks.mockPollTransaction.mockResolvedValue({ status: "SUCCESS" });
+  });
+
+  async function openDepositDialog() {
+    const user = await loadProject();
+    await user.click(screen.getByRole("button", { name: "Deposit Funds" }));
+    const dialog = screen.getByRole("dialog", { name: "Deposit Funds" });
+    return {
+      user,
+      dialog,
+      amount: within(dialog).getByLabelText(/Amount \(in tokens\)/i),
+      confirm: within(dialog).getByRole("button", { name: "Confirm Deposit" })
+    };
+  }
+
+  const describedText = (el: HTMLElement) =>
+    document.getElementById(el.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+
+  it("keeps Confirm Deposit focusable, and moves focus to the amount with an associated error when it is empty", async () => {
+    const { user, amount, confirm } = await openDepositDialog();
+
+    expect(confirm).not.toBeDisabled();
+    expect(confirm).toHaveAttribute("aria-disabled", "true");
+    expect(amount).toHaveAttribute("aria-invalid", "false");
+
+    await user.click(confirm);
+
+    expect(amount).toHaveFocus();
+    expect(amount).toHaveAttribute("aria-invalid", "true");
+    expect(describedText(amount)).toBe("Enter an amount to deposit.");
+    expect(mocks.mockBuildDepositXdr).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["0", "Enter an amount greater than 0."],
+    ["-5", "Enter an amount greater than 0."],
+    ["1.12345678", "Use at most 7 decimal places."]
+  ])("explains why %s is not a valid amount", async (value, message) => {
+    const { user, amount, confirm } = await openDepositDialog();
+    await user.type(amount, value);
+
+    expect(describedText(amount)).toBe(message);
+    await user.click(confirm);
+    expect(amount).toHaveFocus();
+    expect(mocks.mockBuildDepositXdr).not.toHaveBeenCalled();
+  });
+
+  it("clears the error once the amount is valid and submits", async () => {
+    const { user, amount, confirm } = await openDepositDialog();
+    await user.click(confirm);
+    await user.type(amount, "2.5");
+
+    expect(amount).toHaveAttribute("aria-invalid", "false");
+    expect(amount).not.toHaveAttribute("aria-describedby");
+    expect(confirm).toHaveAttribute("aria-disabled", "false");
+
+    await user.click(confirm);
+    await waitFor(() => expect(mocks.mockBuildDepositXdr).toHaveBeenCalledWith("project_1", "GOWNER123", 25_000_000));
   });
 });
