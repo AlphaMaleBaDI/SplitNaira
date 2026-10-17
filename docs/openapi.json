@@ -4161,7 +4161,7 @@
     },
     "/users/login": {
       "post": {
-        "description": "Authenticates a registered user and returns a JWT bearer token.",
+        "description": "Returns a JWT for an active registered wallet. Five failed attempts within 15 minutes lock that wallet for 15 minutes. Unknown, inactive, deleted, and locked wallets receive the same 401 response. The existing per-IP limiter may also return 429.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -4245,12 +4245,14 @@
             },
             "description": "Validation error"
           },
-          "404": {
+          "401": {
             "content": {
               "application/json": {
                 "example": {
-                  "error": "NOT_FOUND",
-                  "message": "Project afrobeats_001 does not exist.",
+                  "code": "UNAUTHORIZED",
+                  "details": {},
+                  "error": "unauthorized",
+                  "message": "Unable to sign in. Check your details or try again later.",
                   "requestId": "b6f1a2d4-8c3e-4a1b-9f2e-6d5c7a8b9c0d"
                 },
                 "schema": {
@@ -4258,7 +4260,7 @@
                 }
               }
             },
-            "description": "Resource not found"
+            "description": "Authentication required"
           },
           "500": {
             "content": {

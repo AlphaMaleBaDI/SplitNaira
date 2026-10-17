@@ -1035,7 +1035,7 @@ registry.registerPath({
   method: "post",
   path: "/users/login",
   summary: "Log in by wallet address",
-  description: "Authenticates a registered user and returns a JWT bearer token.",
+  description: "Returns a JWT for an active registered wallet. Five failed attempts within 15 minutes lock that wallet for 15 minutes. Unknown, inactive, deleted, and locked wallets receive the same 401 response. The existing per-IP limiter may also return 429.",
   tags: ["Users"],
   request: {
     body: {
@@ -1055,7 +1055,18 @@ registry.registerPath({
         },
       },
     },
-    ...standardErrorResponses({ badRequest: true, notFound: true, serverError: true }),
+    ...standardErrorResponses({
+      badRequest: true,
+      unauthorized: true,
+      unauthorizedExample: {
+        error: "unauthorized",
+        code: "UNAUTHORIZED",
+        message: "Unable to sign in. Check your details or try again later.",
+        requestId: EXAMPLE_REQUEST_ID,
+        details: {},
+      },
+      serverError: true,
+    }),
   },
 });
 
