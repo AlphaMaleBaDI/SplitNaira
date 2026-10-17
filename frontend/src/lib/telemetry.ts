@@ -62,9 +62,39 @@ export function registerTelemetrySink(sink: TelemetrySink): () => void {
 }
 
 const ADDRESS_PATTERN = /\b[GC][A-Z2-7]{55}\b/g;
+const EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 
 export function scrubTelemetryText(text: string): string {
-  return text.replace(ADDRESS_PATTERN, "[WALLET_REDACTED]").slice(0, 300);
+  return text
+    .replace(ADDRESS_PATTERN, "[WALLET_REDACTED]")
+    .replace(EMAIL_PATTERN, "[EMAIL_REDACTED]")
+    .slice(0, 300);
+}
+
+/**
+ * Privacy-safe analytics event schema (Issue #1535).
+ * Validates that event payloads never contain PII or unredacted wallet addresses.
+ */
+export interface PrivacyAnalyticsEventSchema {
+  eventName: string;
+  category: "split.lifecycle" | "navigation" | "user.action";
+  anonymizedUserId?: string;
+  properties: Record<string, string | number | boolean>;
+  timestamp: number;
+}
+
+export function validatePrivacyAnalyticsEvent(event: PrivacyAnalyticsEventSchema): boolean {
+  if (!event.eventName || !event.category || typeof event.timestamp !== "number") {
+    return false;
+  }
+  for (const value of Object.values(event.properties)) {
+    if (typeof value === "string") {
+      if (ADDRESS_PATTERN.test(value) || EMAIL_PATTERN.test(value)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 export function classifyLifecycleError(error: unknown): SplitLifecycleErrorKind {
