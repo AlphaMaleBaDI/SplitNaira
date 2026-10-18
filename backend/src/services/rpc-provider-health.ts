@@ -6,6 +6,8 @@
  * reported as provider-health failures: malformed data is not evidence that a
  * different provider's response is safe to trust.
  */
+import type { rpc } from "@stellar/stellar-sdk";
+
 export interface RpcProviderHealthOptions {
   failureThreshold?: number;
   cooldownMs?: number;
@@ -23,7 +25,6 @@ export class RpcProviderHealthPolicy {
   private readonly failureThreshold: number;
   private readonly cooldownMs: number;
   private readonly now: () => number;
-  private cursor = 0;
 
   constructor(urls: readonly string[], options: RpcProviderHealthOptions = {}) {
     const uniqueUrls = [...new Set(urls.map((url) => url.trim()).filter(Boolean))];
@@ -47,30 +48,22 @@ export class RpcProviderHealthPolicy {
       consecutiveFailures: 0,
       unhealthyUntil: 0,
     }));
-    this.failureThreshold = Math.max(1, Math.floor(options.failureThreshold ?? 2));
+    this.failureThreshold = Math.max(1, Math.floor(options.failureThreshold ?? 1));
     this.cooldownMs = Math.max(1, Math.floor(options.cooldownMs ?? 30_000));
     this.now = options.now ?? Date.now;
   }
 
-  /** Select the next eligible provider in stable round-robin order. */
+  /** Prefer the primary endpoint; use backups only while earlier providers are quarantined. */
   next(): string {
     const now = this.now();
-    for (let offset = 0; offset < this.providers.length; offset += 1) {
-      const index = (this.cursor + offset) % this.providers.length;
-      const provider = this.providers[index]!;
-      if (provider.unhealthyUntil <= now) {
-        this.cursor = (index + 1) % this.providers.length;
-        return provider.url;
-      }
-    }
+    const eligible = this.providers.find((provider) => provider.unhealthyUntil <= now);
+    if (eligible) return eligible.url;
 
-    // Fail closed but permit a single half-open probe after the earliest
-    // quarantine expires; never silently invent a provider or report success.
-    const earliest = this.providers.reduce((best, provider) =>
+    // If every endpoint is quarantined, allow a retry against the one whose
+    // cooldown expires first. A response is still subject to normal validation.
+    return this.providers.reduce((best, provider) =>
       provider.unhealthyUntil < best.unhealthyUntil ? provider : best,
-    );
-    this.cursor = (this.providers.indexOf(earliest) + 1) % this.providers.length;
-    return earliest.url;
+    ).url;
   }
 
   recordSuccess(url: string): void {
@@ -110,4 +103,57 @@ export function parseRpcProviderUrls(primary: string, backups?: string): string[
     throw new Error("SOROBAN_RPC_URL must configure at least one provider");
   }
   return unique;
+}
+
+
+const failoverInstalledClients = new WeakSet<object>();
+type RpcRequestConfig = { baseURL?: string; __rpcProviderUrl?: string };
+type RpcResponseLike = { config?: RpcRequestConfig };
+type RpcTransportError = {
+  config?: RpcRequestConfig;
+  code?: string;
+  response?: { status?: number };
+};
+
+/**
+ * Routes SDK HTTP requests through the provider health policy. Register this
+ * AFTER response validation so malformed/stale payloads cannot mark a provider
+ * healthy. Only transport failures, timeouts, rate limits and upstream 5xx
+ * responses affect provider health; JSON-RPC and schema errors do not.
+ */
+export function installRpcProviderFailover(
+  server: Pick<rpc.Server, "httpClient">,
+  policy: RpcProviderHealthPolicy,
+): boolean {
+  const client = server.httpClient;
+  if (!client?.interceptors?.request || !client?.interceptors?.response) return false;
+  if (failoverInstalledClients.has(client)) return true;
+
+  client.interceptors.request.use((config) => {
+    const providerUrl = policy.next();
+    config.baseURL = providerUrl;
+    (config as typeof config & { __rpcProviderUrl?: string }).__rpcProviderUrl = providerUrl;
+    return config;
+  });
+
+  client.interceptors.response.use(
+    (response) => {
+      const providerUrl = (response as typeof response & RpcResponseLike).config?.__rpcProviderUrl;
+      if (providerUrl) policy.recordSuccess(providerUrl);
+      return response;
+    },
+    (error: unknown) => {
+      if (typeof error === "object" && error !== null) {
+        const transportError = error as RpcTransportError;
+        const providerUrl = transportError.config?.__rpcProviderUrl;
+        const status = transportError.response?.status;
+        const transportFailure = status === undefined || status === 429 || status >= 500;
+        if (providerUrl && transportFailure) policy.recordFailure(providerUrl);
+      }
+      return Promise.reject(error);
+    },
+  );
+
+  failoverInstalledClients.add(client);
+  return true;
 }
