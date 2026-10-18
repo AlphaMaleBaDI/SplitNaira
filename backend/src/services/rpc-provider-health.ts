@@ -59,11 +59,9 @@ export class RpcProviderHealthPolicy {
     const eligible = this.providers.find((provider) => provider.unhealthyUntil <= now);
     if (eligible) return eligible.url;
 
-    // If every endpoint is quarantined, allow a retry against the one whose
-    // cooldown expires first. A response is still subject to normal validation.
-    return this.providers.reduce((best, provider) =>
-      provider.unhealthyUntil < best.unhealthyUntil ? provider : best,
-    ).url;
+    // Do not probe a quarantined endpoint early. Let the caller's existing
+    // retry budget elapse until at least one cooldown has expired.
+    throw new Error("All Soroban RPC providers are temporarily unavailable");
   }
 
   recordSuccess(url: string): void {
