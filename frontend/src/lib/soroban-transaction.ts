@@ -5,6 +5,12 @@ import { rpc, Transaction, type FeeBumpTransaction } from "@stellar/stellar-sdk"
 
 import { formatContractFailure } from "./contract-errors";
 import { getEnv } from "./env";
+import {
+  RpcResponseValidationError,
+  installRpcResponseValidation,
+  parseGetTransactionResponse,
+  parseSendTransactionResponse,
+} from "./stellar-rpc-validation";
 
 const DEFAULT_POLL_ATTEMPTS = Number(getEnv().NEXT_PUBLIC_TX_POLL_TIMEOUT) || 90;
 
@@ -16,7 +22,10 @@ const GET_TX = {
 } as const;
 
 export function createSorobanRpcServer(): rpc.Server {
-  return new rpc.Server(getEnv().NEXT_PUBLIC_SOROBAN_RPC_URL, { allowHttp: true });
+  const server = new rpc.Server(getEnv().NEXT_PUBLIC_SOROBAN_RPC_URL, { allowHttp: true });
+  // Issue #1494: validate every JSON-RPC response before the SDK parses it.
+  installRpcResponseValidation(server);
+  return server;
 }
 
 function submissionErrorMessage(submit: rpc.Api.SendTransactionResponse): string {
@@ -44,21 +53,51 @@ function ledgerFailureMessage(polled: rpc.Api.GetTransactionResponse): string {
   return "Transaction failed on ledger (see explorer for details).";
 }
 
-/**
- * Submits a signed Soroban transaction, then polls until the RPC reports a
- * terminal ledger outcome (success, failure, or poll timeout).
- */
-export async function submitSorobanTransactionAndPoll(
-  server: rpc.Server,
-  transaction: Transaction | FeeBumpTransaction,
-  options?: {
-    pollAttempts?: number;
-    /** Invoked as soon as the RPC accepts the tx (hash known), before polling completes. */
-    afterSubmitted?: (hash: string) => void;
-  }
-): Promise<{ hash: string }> {
-  const submit = await server.sendTransaction(transaction);
+/** Reports a malformed RPC response without its payload: method and field paths only. */
+function reportInvalidRpcResponse(error: RpcResponseValidationError, action: string, txHash?: string): void {
+  Sentry.captureException(error, {
+    tags: {
+      section: "soroban-transaction",
+      action,
+      method: error.method,
+    },
+    extra: {
+      txHash,
+      fields: error.issues.map((issue) => issue.path),
+    },
+  });
+}
 
+/**
+ * The transaction may have reached the network but its outcome is unknown.
+ * Named `TimeoutError` so `isUnconfirmedSubmission` keeps the action blocked
+ * until the outcome is resolved, exactly as for a poll timeout.
+ */
+function unconfirmedSubmissionError(cause: unknown): Error {
+  const error = new Error(
+    "Transaction was submitted but its status could not be verified. Check the explorer for the latest status.",
+    { cause }
+  );
+  error.name = "TimeoutError";
+  return error;
+}
+
+function localTransactionHash(transaction: Transaction | FeeBumpTransaction): string | null {
+  try {
+    return typeof transaction?.hash === "function" ? transaction.hash().toString("hex") : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Throws unless the RPC accepted the submission (`PENDING` or `DUPLICATE`
+ * with a valid hash). A rejected (`ERROR`) or deferred (`TRY_AGAIN_LATER`)
+ * submission is never treated as success.
+ */
+function assertSubmissionAccepted(
+  submit: rpc.Api.SendTransactionResponse
+): asserts submit is rpc.Api.SendTransactionResponse & { status: "PENDING" | "DUPLICATE" } {
   if (submit.status === "ERROR" || submit.status === "TRY_AGAIN_LATER") {
     const errorMsg = submissionErrorMessage(submit);
     const err = new Error(errorMsg);
@@ -75,24 +114,80 @@ export async function submitSorobanTransactionAndPoll(
     });
     throw err;
   }
+}
 
-  const hash = submit.hash;
-  if (!hash) {
-    const err = new Error("Submission did not return a transaction hash.");
-    Sentry.captureException(err, {
-      tags: {
-        section: "soroban-transaction",
-        action: "submit",
-      }
-    });
-    throw err;
+/**
+ * Submits a signed Soroban transaction without waiting for the ledger
+ * outcome. Resolves only when the RPC accepted it; throws on rejection,
+ * `TRY_AGAIN_LATER`, or a malformed response (`RpcResponseValidationError`).
+ */
+export async function sendSorobanTransaction(
+  server: rpc.Server,
+  transaction: Transaction | FeeBumpTransaction
+): Promise<{ hash: string }> {
+  let submit: rpc.Api.SendTransactionResponse;
+  try {
+    submit = await server.sendTransaction(transaction);
+    parseSendTransactionResponse(submit);
+  } catch (error) {
+    if (error instanceof RpcResponseValidationError) {
+      reportInvalidRpcResponse(error, "submit", localTransactionHash(transaction) ?? undefined);
+    }
+    throw error;
   }
+  assertSubmissionAccepted(submit);
+  return { hash: submit.hash };
+}
+
+/**
+ * Submits a signed Soroban transaction, then polls until the RPC reports a
+ * terminal ledger outcome (success, failure, or poll timeout).
+ *
+ * Issue #1494: a malformed RPC response after the transaction may have
+ * reached the network is reported as an unconfirmed submission (see
+ * `unconfirmedSubmissionError`), never as success and never as a plain
+ * failure that would invite a second payment.
+ */
+export async function submitSorobanTransactionAndPoll(
+  server: rpc.Server,
+  transaction: Transaction | FeeBumpTransaction,
+  options?: {
+    pollAttempts?: number;
+    /** Invoked as soon as the RPC accepts the tx (hash known), before polling completes. */
+    afterSubmitted?: (hash: string) => void;
+  }
+): Promise<{ hash: string }> {
+  let submit: rpc.Api.SendTransactionResponse;
+  try {
+    submit = await server.sendTransaction(transaction);
+    parseSendTransactionResponse(submit);
+  } catch (error) {
+    if (!(error instanceof RpcResponseValidationError)) throw error;
+    const localHash = localTransactionHash(transaction);
+    reportInvalidRpcResponse(error, "submit", localHash ?? undefined);
+    if (!localHash) throw error;
+    // The RPC may have accepted it: track it by its own hash so the caller
+    // keeps the action blocked until the outcome is known.
+    options?.afterSubmitted?.(localHash);
+    throw unconfirmedSubmissionError(error);
+  }
+
+  assertSubmissionAccepted(submit);
+  const hash = submit.hash;
 
   options?.afterSubmitted?.(hash);
 
-  const polled = await server.pollTransaction(hash, {
-    attempts: options?.pollAttempts ?? DEFAULT_POLL_ATTEMPTS
-  });
+  let polled: rpc.Api.GetTransactionResponse;
+  try {
+    polled = await server.pollTransaction(hash, {
+      attempts: options?.pollAttempts ?? DEFAULT_POLL_ATTEMPTS
+    });
+    parseGetTransactionResponse(polled);
+  } catch (error) {
+    if (!(error instanceof RpcResponseValidationError)) throw error;
+    reportInvalidRpcResponse(error, "poll", hash);
+    throw unconfirmedSubmissionError(error);
+  }
 
   if (polled.status === GET_TX.NOT_FOUND) {
     const error = new Error(
@@ -123,16 +218,7 @@ export async function submitSorobanTransactionAndPoll(
     return { hash };
   }
 
-  const err = new Error(`Unexpected transaction status: ${String((polled as { status: string }).status)}`);
-  Sentry.captureException(err, {
-    tags: {
-      section: "soroban-transaction",
-      action: "poll",
-      status: String((polled as { status: string }).status),
-    },
-    extra: {
-      txHash: hash,
-    }
-  });
-  throw err;
+  // Unreachable: the status was validated above. Kept so an unexpected
+  // status can never fall through to success.
+  throw unconfirmedSubmissionError(new Error("Unknown transaction status"));
 }

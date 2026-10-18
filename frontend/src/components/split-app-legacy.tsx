@@ -2,7 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { rpc, Transaction, StrKey } from "@stellar/stellar-sdk";
+import { Transaction, StrKey } from "@stellar/stellar-sdk";
 import { clsx } from "clsx";
 import { Controller, useFieldArray, useForm, type SubmitHandler } from "react-hook-form";
 import { useTranslations } from "next-intl";
@@ -35,6 +35,7 @@ import {
 import { isOwner, findDuplicateCollaboratorAddressIds, type CollaboratorAddressEntry } from "@/lib/address";
 import {
   createSorobanRpcServer,
+  sendSorobanTransaction,
   signWithWallet,
   submitSorobanTransactionAndPoll,
 } from "@/lib/wallet";
@@ -437,10 +438,8 @@ export function SplitApp({
       );
       const server = createSorobanRpcServer();
       const transaction = new Transaction(signedTxXdr, buildResponse.metadata.networkPassphrase);
-      const submitResponse = await server.sendTransaction(transaction);
-      if (submitResponse.status === "ERROR")
-        throw new Error(submitResponse.errorResult?.toString() ?? "Transaction failed.");
-      setLastRecoveryTxHash(submitResponse.hash ?? null);
+      const submitResponse = await sendSorobanTransaction(server, transaction);
+      setLastRecoveryTxHash(submitResponse.hash);
       setShowRecoveryConfirm(false);
       notify.success("Recovery transaction submitted successfully.");
       await onInspectUnallocated();
@@ -494,9 +493,7 @@ export function SplitApp({
       );
       const server = createSorobanRpcServer();
       const transaction = new Transaction(signedTxXdr, buildResponse.metadata.networkPassphrase);
-      const submitResponse = await server.sendTransaction(transaction);
-      if (submitResponse.status === "ERROR")
-        throw new Error(submitResponse.errorResult?.toString() ?? "Transaction failed.");
+      const submitResponse = await sendSorobanTransaction(server, transaction);
       telemetry.submitted(submitResponse.hash);
       telemetry.succeeded();
       notify.success("Project metadata updated successfully.");
@@ -538,9 +535,7 @@ export function SplitApp({
       );
       const server = createSorobanRpcServer();
       const transaction = new Transaction(signedTxXdr, buildResponse.metadata.networkPassphrase);
-      const submitResponse = await server.sendTransaction(transaction);
-      if (submitResponse.status === "ERROR")
-        throw new Error(submitResponse.errorResult?.toString() ?? "Transaction failed.");
+      const submitResponse = await sendSorobanTransaction(server, transaction);
       telemetry.submitted(submitResponse.hash);
       telemetry.succeeded();
       notify.success("Collaborators updated successfully.");
@@ -1066,16 +1061,10 @@ export function SplitApp({
         buildResponse.xdr,
         buildResponse.metadata.networkPassphrase,
       );
-      const server = new rpc.Server(
-        process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org",
-        { allowHttp: true },
-      );
+      const server = createSorobanRpcServer();
       const transaction = new Transaction(signedTxXdr, buildResponse.metadata.networkPassphrase);
-      const submitResponse = await server.sendTransaction(transaction);
-      if (submitResponse.status === "ERROR") {
-        throw new Error(submitResponse.errorResult?.toString() ?? "Transaction failed.");
-      }
-      setLastPauseTxHash(submitResponse.hash ?? null);
+      const submitResponse = await sendSorobanTransaction(server, transaction);
+      setLastPauseTxHash(submitResponse.hash);
       setShowPauseConfirm(false);
       setShowUnpauseConfirm(false);
       notify.success(action === "pause" ? "Distributions paused." : "Distributions resumed.");
@@ -1102,12 +1091,11 @@ export function SplitApp({
       );
       const server = createSorobanRpcServer();
       const transaction = new Transaction(signedTxXdr, buildResponse.metadata.networkPassphrase);
-      const submitResponse = await server.sendTransaction(transaction);
-      if (submitResponse.status === "ERROR") throw new Error("Allowlist action failed.");
+      const submitResponse = await sendSorobanTransaction(server, transaction);
       setLastAllowlistTx({
         action,
         token: normalizedAllowlistToken,
-        txHash: submitResponse.hash ?? null,
+        txHash: submitResponse.hash,
       });
       setAllowlistTokenInput("");
       notify.success("Allowlist updated.");

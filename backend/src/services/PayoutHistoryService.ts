@@ -5,7 +5,8 @@
 import { getDataSource } from "./database.js";
 import { TransactionRecord } from "../entities/Transaction.js";
 import { logger } from "./logger.js";
-import { Like } from "typeorm";
+import { Like, type SelectQueryBuilder } from "typeorm";
+import type { TransactionCursor } from "../lib/keyset-cursor.js";
 
 export interface PayoutRecord {
   id: string;
@@ -21,6 +22,8 @@ export interface PayoutRecord {
 export interface PayoutHistoryIndex {
   getPayouts(filters?: PayoutFilters): Promise<PayoutRecord[]>;
   getPayoutsWithCount(filters?: PayoutFilters): Promise<{ records: PayoutRecord[]; total: number }>;
+  /** One keyset/offset page plus the metadata needed to request the next one (#1259). */
+  getPayoutsPage(filters?: PayoutPageFilters): Promise<PayoutPage>;
   getPayoutById(id: string): Promise<PayoutRecord | null>;
   getPayoutByTxHash(txHash: string): Promise<PayoutRecord | null>;
   getPayoutsByRound(roundId: string): Promise<PayoutRecord[]>;
@@ -55,6 +58,50 @@ export interface PayoutFilters {
   offset?: number;
 }
 
+export interface PayoutPageFilters extends PayoutFilters {
+  /**
+   * Continue after this row. When present it takes precedence over `offset`:
+   * a keyset page must not skip rows, and mixing the two would make the
+   * result depend on how many rows were inserted since the cursor was issued.
+   */
+  cursor?: TransactionCursor;
+}
+
+export interface PayoutPage {
+  records: PayoutRecord[];
+  /** Total rows matching the filters, ignoring the cursor and page window. */
+  total: number;
+  /** True when at least one more row follows this page. */
+  hasMore: boolean;
+}
+
+function applyPayoutFilters(
+  query: SelectQueryBuilder<TransactionRecord>,
+  filters: PayoutFilters | undefined,
+): void {
+  if (filters?.recipient) {
+    query.andWhere("transaction.recipient = :recipient", { recipient: filters.recipient });
+  }
+  if (filters?.status) {
+    query.andWhere("transaction.status = :status", { status: filters.status });
+  }
+  if (filters?.startDate !== undefined) {
+    query.andWhere("transaction.timestamp >= :startDate", { startDate: filters.startDate });
+  }
+  if (filters?.endDate !== undefined) {
+    query.andWhere("transaction.timestamp <= :endDate", { endDate: filters.endDate });
+  }
+}
+
+/**
+ * `timestamp` alone is not a total order: two payouts can share a second.
+ * `id` is the tie-breaker, and the keyset cursor uses the same pair, so a
+ * row can never be returned twice or skipped between pages.
+ */
+function applyStableOrder(query: SelectQueryBuilder<TransactionRecord>): void {
+  query.orderBy("transaction.timestamp", "DESC").addOrderBy("transaction.id", "DESC");
+}
+
 export interface PayoutIndexConfig {
   storageFile: string;
   reindexInterval: number;
@@ -68,20 +115,8 @@ export function createPayoutHistoryService(_config?: Partial<PayoutIndexConfig>)
         const repo = getDataSource().getRepository(TransactionRecord);
         const query = repo.createQueryBuilder("transaction");
 
-        if (filters?.recipient) {
-          query.andWhere("transaction.recipient = :recipient", { recipient: filters.recipient });
-        }
-        if (filters?.status) {
-          query.andWhere("transaction.status = :status", { status: filters.status });
-        }
-        if (filters?.startDate !== undefined) {
-          query.andWhere("transaction.timestamp >= :startDate", { startDate: filters.startDate });
-        }
-        if (filters?.endDate !== undefined) {
-          query.andWhere("transaction.timestamp <= :endDate", { endDate: filters.endDate });
-        }
-
-        query.orderBy("transaction.timestamp", "DESC");
+        applyPayoutFilters(query, filters);
+        applyStableOrder(query);
 
         if (filters?.offset !== undefined) {
           query.skip(filters.offset);
@@ -103,26 +138,66 @@ export function createPayoutHistoryService(_config?: Partial<PayoutIndexConfig>)
         const repo = getDataSource().getRepository(TransactionRecord);
         const query = repo.createQueryBuilder("transaction");
 
-        if (filters?.recipient) {
-          query.andWhere("transaction.recipient = :recipient", { recipient: filters.recipient });
-        }
-        if (filters?.status) {
-          query.andWhere("transaction.status = :status", { status: filters.status });
-        }
-        if (filters?.startDate !== undefined) {
-          query.andWhere("transaction.timestamp >= :startDate", { startDate: filters.startDate });
-        }
-        if (filters?.endDate !== undefined) {
-          query.andWhere("transaction.timestamp <= :endDate", { endDate: filters.endDate });
-        }
+        applyPayoutFilters(query, filters);
+        applyStableOrder(query);
 
-        query.orderBy("transaction.timestamp", "DESC");
+        if (filters?.offset !== undefined) {
+          query.skip(filters.offset);
+        }
+        if (filters?.limit !== undefined) {
+          query.take(filters.limit);
+        }
 
         const [records, total] = await query.getManyAndCount();
         return { records: records as PayoutRecord[], total };
       } catch (error) {
         logger.error("Error fetching payouts with count from database", { error });
         return { records: [], total: 0 };
+      }
+    },
+
+    async getPayoutsPage(filters?: PayoutPageFilters) {
+      const limit = filters?.limit ?? 20;
+
+      try {
+        const repo = getDataSource().getRepository(TransactionRecord);
+
+        // `total` describes the whole filtered set, not the remainder after
+        // the cursor, so the count query deliberately omits cursor/offset.
+        const countQuery = repo.createQueryBuilder("transaction");
+        applyPayoutFilters(countQuery, filters);
+        const total = await countQuery.getCount();
+
+        const pageQuery = repo.createQueryBuilder("transaction");
+        applyPayoutFilters(pageQuery, filters);
+        applyStableOrder(pageQuery);
+
+        if (filters?.cursor) {
+          pageQuery.andWhere(
+            `(
+              transaction.timestamp < :cursorTimestamp
+              OR (transaction.timestamp = :cursorTimestamp AND transaction.id < :cursorId)
+            )`,
+            {
+              cursorTimestamp: filters.cursor.timestamp,
+              cursorId: filters.cursor.id,
+            },
+          );
+        } else if (filters?.offset !== undefined && filters.offset > 0) {
+          pageQuery.skip(filters.offset);
+        }
+
+        // Fetch one extra row to learn whether another page exists without a
+        // second count query, then discard it before responding.
+        pageQuery.take(limit + 1);
+        const rows = (await pageQuery.getMany()) as PayoutRecord[];
+        const hasMore = rows.length > limit;
+        const records = hasMore ? rows.slice(0, limit) : rows;
+
+        return { records, total, hasMore };
+      } catch (error) {
+        logger.error("Error fetching payouts page from database", { error });
+        return { records: [], total: 0, hasMore: false };
       }
     },
 

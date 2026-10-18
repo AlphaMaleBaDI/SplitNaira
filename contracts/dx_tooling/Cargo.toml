@@ -3,5 +3,14 @@ name = "dx_tooling"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# `deployer` records deployment metadata with std/fs/serde. The core modules
+# (validator, compiler, simulator, types, errors) stay `no_std` + `alloc`.
+default = ["std"]
+std = ["dep:serde", "dep:serde_json", "dep:chrono"]
+
 [dependencies]
 soroban-sdk = "20.0.0"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"], optional = true }

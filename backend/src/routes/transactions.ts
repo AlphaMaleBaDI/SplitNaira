@@ -1,8 +1,22 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { transactionHistoryQuerySchema, transactionExportQuerySchema } from "../schemas/transactions.schemas.js";
+import {
+  transactionHistoryQuerySchema,
+  transactionExportQuerySchema,
+  transactionRecipientQuerySchema,
+} from "../schemas/transactions.schemas.js";
 import { AppError, ErrorCode, ErrorType } from "../lib/errors.js";
 import { toCsvRow } from "../lib/csv.js";
-import { createPayoutHistoryService, type PayoutRecord } from "../services/PayoutHistoryService.js";
+import {
+  createPayoutHistoryService,
+  type PayoutPage,
+  type PayoutRecord,
+} from "../services/PayoutHistoryService.js";
+import {
+  decodeTransactionCursor,
+  encodeTransactionCursor,
+  InvalidTransactionCursorError,
+  type TransactionCursor,
+} from "../lib/keyset-cursor.js";
 import { authJwtMiddleware } from "../middleware/auth-jwt.js";
 import { logger } from "../services/logger.js";
 import { getEnv } from "../config/env.js";
@@ -16,6 +30,35 @@ const payoutHistoryService = createPayoutHistoryService();
 // the caller's own rate limit. Protects the DB and the response from an
 // unbounded query even for a fully authorized, well-intentioned caller.
 const EXPORT_MAX_ROWS = 50_000;
+
+function decodePageCursor(raw: string | undefined): TransactionCursor | undefined {
+  if (raw === undefined) return undefined;
+
+  try {
+    return decodeTransactionCursor(raw);
+  } catch (error) {
+    if (error instanceof InvalidTransactionCursorError) {
+      throw new AppError(
+        ErrorType.VALIDATION,
+        ErrorCode.VALIDATION_ERROR,
+        "Invalid pagination cursor.",
+        undefined,
+        { cursor: "invalid" },
+      );
+    }
+    throw error;
+  }
+}
+
+function buildPageMetadata(page: PayoutPage, limit: number, offset: number) {
+  const last = page.records.at(-1);
+  const nextCursor =
+    page.hasMore && last
+      ? encodeTransactionCursor({ timestamp: last.timestamp, id: last.id })
+      : null;
+
+  return { limit, offset, hasMore: page.hasMore, nextCursor };
+}
 
 function formatTransactionRow(record: PayoutRecord): (string | number)[] {
   return [
@@ -50,7 +93,8 @@ transactionsRouter.get("/history", async (req: Request, res: Response, next: Nex
       );
     }
 
-    const { walletAddress, startDate, endDate, status, limit, offset } = parsed.data;
+    const { walletAddress, startDate, endDate, status, limit, offset, cursor } = parsed.data;
+    const decodedCursor = decodePageCursor(cursor);
 
     logger.info("Fetching transaction history", {
       walletAddress,
@@ -59,22 +103,23 @@ transactionsRouter.get("/history", async (req: Request, res: Response, next: Nex
       status,
       limit,
       offset,
+      cursor: decodedCursor ? "provided" : "none",
     });
 
-    const { records, total } = await payoutHistoryService.getPayoutsWithCount({
+    const page = await payoutHistoryService.getPayoutsPage({
       recipient: walletAddress,
       startDate,
       endDate,
       status,
       limit,
-      offset
+      offset,
+      cursor: decodedCursor,
     });
 
     return res.status(200).json({
-      transactions: records,
-      total,
-      limit,
-      offset
+      transactions: page.records,
+      total: page.total,
+      ...buildPageMetadata(page, limit, offset),
     });
   } catch (error) {
     return next(error);
@@ -253,7 +298,16 @@ transactionsRouter.get("/recipient/:walletAddress", async (req: Request, res: Re
       );
     }
 
-    logger.info("Fetching transactions for recipient", { walletAddress });
+    const parsedQuery = transactionRecipientQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      throw new AppError(
+        ErrorType.VALIDATION,
+        ErrorCode.VALIDATION_ERROR,
+        "Invalid query parameters.",
+        undefined,
+        parsedQuery.error.flatten()
+      );
+    }
 
     const recipient = parsed.data;
     if (!recipient) {
@@ -264,12 +318,28 @@ transactionsRouter.get("/recipient/:walletAddress", async (req: Request, res: Re
       );
     }
 
-    const transactions = await payoutHistoryService.getPayoutsByRecipient(recipient);
+    const { limit, offset, cursor } = parsedQuery.data;
+    const decodedCursor = decodePageCursor(cursor);
+
+    logger.info("Fetching transactions for recipient", {
+      walletAddress,
+      limit,
+      offset,
+      cursor: decodedCursor ? "provided" : "none",
+    });
+
+    const page = await payoutHistoryService.getPayoutsPage({
+      recipient,
+      limit,
+      offset,
+      cursor: decodedCursor,
+    });
 
     return res.status(200).json({
-      transactions,
-      total: transactions.length,
-      walletAddress: parsed.data
+      transactions: page.records,
+      total: page.total,
+      walletAddress: recipient,
+      ...buildPageMetadata(page, limit, offset),
     });
   } catch (error) {
     return next(error);

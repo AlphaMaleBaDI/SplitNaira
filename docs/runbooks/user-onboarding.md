@@ -122,7 +122,7 @@ Then redeploy the previous backend version.
 ## Monitoring
 
 - **Registration errors:** Filter backend logs for `level: "error"` and `route: "/users/register"`.
-- **Login 404 rate:** A spike in 404s on `/users/login` may indicate a wallet mismatch or data loss.
+- **Login 401 rate:** Unknown, inactive, deleted, and temporarily locked wallets share a generic 401 response. See [lockout and recovery](../auth-lockout-policy.md) before investigating; do not infer account existence from a failure.
 - **Sentry:** Monitor the `production` environment for `AppError` events tagged with `section: "users"`.
 
 ---
