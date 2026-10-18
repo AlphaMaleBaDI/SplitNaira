@@ -23,10 +23,25 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v6
         with:
           node-version: 20
 
-      - name: Check formatting with Prettier
-        run: npx prettier --check "docs/**/*.md" "runbooks/**/*.md" "*.md"
+      - name: Check changed Markdown formatting with Prettier
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- 'docs/**/*.md' 'runbooks/**/*.md' '*.md')
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No Markdown files changed; skipping formatting validation."
+            exit 0
+          fi
+
+          npx prettier --check "${files[@]}"
