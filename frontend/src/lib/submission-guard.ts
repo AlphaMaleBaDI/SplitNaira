@@ -12,6 +12,8 @@
  *    waiting out the transaction's validity window.
  */
 
+import { parseGetTransactionResponse } from "./stellar-rpc-validation";
+
 /** Built transactions are valid for 300s (`setTimeout(300)` in the backend's transaction builders). */
 export const TX_VALIDITY_WINDOW_MS = 300_000;
 /** Extra margin for clock skew and ledger close time before treating a missing transaction as expired. */
@@ -94,6 +96,8 @@ interface TransactionStatusSource {
  *    land and the action is safe to retry.
  *  - `pending`: not found yet but could still land. Keep the action blocked.
  * RPC errors count as `pending`: not knowing is not a reason to unblock.
+ * So does a malformed response or an unknown status (#1494): only an
+ * explicit `NOT_FOUND` can ever mark a transaction as expired.
  */
 export async function resolveUnconfirmedSubmission(
   server: TransactionStatusSource,
@@ -102,7 +106,7 @@ export async function resolveUnconfirmedSubmission(
 ): Promise<UnconfirmedResolution> {
   let status: string;
   try {
-    status = (await server.getTransaction(submission.hash)).status;
+    status = parseGetTransactionResponse(await server.getTransaction(submission.hash)).status;
   } catch {
     return "pending";
   }
