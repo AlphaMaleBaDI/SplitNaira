@@ -53,7 +53,10 @@ export class RpcProviderHealthPolicy {
     this.now = options.now ?? Date.now;
   }
 
-  /** Prefer the primary endpoint; use backups only while earlier providers are quarantined. */
+  /**
+   * Prefer the primary endpoint; use backups only while earlier providers
+   * are quarantined.
+   */
   next(): string {
     const now = this.now();
     const eligible = this.providers.find((provider) => provider.unhealthyUntil <= now);
@@ -93,9 +96,7 @@ export class RpcProviderHealthPolicy {
 
 /** Parse a comma-separated endpoint list without exposing URL values in errors. */
 export function parseRpcProviderUrls(primary: string, backups?: string): string[] {
-  const urls = [primary, ...(backups ?? "").split(",")]
-    .map((url) => url.trim())
-    .filter(Boolean);
+  const urls = [primary, ...(backups ?? "").split(",")].map((url) => url.trim()).filter(Boolean);
   const unique = [...new Set(urls)];
   if (unique.length === 0) {
     throw new Error("SOROBAN_RPC_URL must configure at least one provider");
