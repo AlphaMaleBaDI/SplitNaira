@@ -217,6 +217,26 @@ alerts on nonzero exit. If `ledger_blocks` doesn't exist in the target
 database, the script logs a warning explaining that the cross-check was
 skipped, rather than crashing or reporting misleading false positives.
 
+### Read-only cleanup preview
+
+To make the intent explicit before investigating cleanup, run:
+
+```bash
+cd backend
+npm run preview:orphaned-cleanup
+```
+
+This produces the same masked, read-only reconciliation report as the normal
+check. It does not modify or delete rows. The checker deliberately rejects
+`--apply`, `--cleanup`, and `--delete`; there is no automatic deletion mode.
+An unmatched completed transaction may be payout history without a matching
+ledger ingest, while an unmatched settlement ledger row may be the only
+independent evidence of an on-chain payout. Neither class is safe to discard
+based only on the mismatch. Verify findings against the Stellar ledger and
+use the remediation steps above; retain the transaction and audit evidence.
+Do not pass unrecognized flags, as the CLI rejects them instead of silently
+falling back to another mode.
+
 ### Automated test coverage
 
 `backend/src/scripts/check-orphaned-transactions.test.ts` exercises the core
@@ -235,6 +255,9 @@ milestone-type block with no matching transaction (not flagged — only
 warning, no false positives, non-42P01 errors still propagate), and the
 wallet-masking behavior for both hard findings and the informational
 recipient summary.
+It also covers the cleanup-preview CLI option, its backward-compatible
+read-only default, rejection of destructive flags, and rejection of unknown
+or conflicting arguments.
 
 This was additionally validated end-to-end against a real local Postgres
 instance (via this repo's `docker-compose.yml`) with seeded data reproducing

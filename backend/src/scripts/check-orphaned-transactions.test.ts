@@ -5,6 +5,7 @@ import {
   maskWalletAddress,
   sanitizeErrorMessage,
   LEDGER_BLOCKS_MISSING_WARNING,
+  parseOrphanedTransactionsCliOptions,
 } from "./check-orphaned-transactions.js";
 import { TransactionRecord } from "../entities/Transaction.js";
 import { LedgerBlock } from "../entities/LedgerBlock.js";
@@ -115,6 +116,36 @@ describe("sanitizeErrorMessage", () => {
     expect(sanitizeErrorMessage("relation \"ledger_blocks\" does not exist")).toBe(
       "relation \"ledger_blocks\" does not exist"
     );
+  });
+});
+
+describe("parseOrphanedTransactionsCliOptions", () => {
+  it("preserves the default read-only check mode", () => {
+    expect(parseOrphanedTransactionsCliOptions([])).toEqual({ cleanupPreview: false });
+  });
+
+  it("accepts the explicit cleanup preview as a read-only mode", () => {
+    expect(parseOrphanedTransactionsCliOptions(["--cleanup-preview"])).toEqual({
+      cleanupPreview: true,
+    });
+  });
+
+  it.each(["--apply", "--cleanup", "--delete"])(
+    "rejects the destructive %s option",
+    (flag) => {
+      expect(() => parseOrphanedTransactionsCliOptions([flag])).toThrow(
+        "Destructive orphan cleanup is not supported"
+      );
+    }
+  );
+
+  it("rejects unknown and combined options rather than silently proceeding", () => {
+    expect(() => parseOrphanedTransactionsCliOptions(["--preview"])).toThrow(
+      "Unsupported orphan-check option(s)"
+    );
+    expect(() =>
+      parseOrphanedTransactionsCliOptions(["--cleanup-preview", "--delete"])
+    ).toThrow("Destructive orphan cleanup is not supported");
   });
 });
 

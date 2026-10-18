@@ -23,6 +23,7 @@
     "validate:deploy-config": "tsx src/utils/deploy-config.ts validate",
     "migration:dry-run": "node scripts/run-migration-dry-run.mjs",
     "audit:db-consistency": "tsx src/scripts/audit-database-consistency.ts",
+    "preview:orphaned-cleanup": "tsx src/scripts/check-orphaned-transactions.ts --cleanup-preview",
     "seed:dev": "tsx src/scripts/seed-development.ts"
   },
   "dependencies": {

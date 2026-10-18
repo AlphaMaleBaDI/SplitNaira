@@ -67,15 +67,18 @@ pg_dump \
   --verbose \
   --file="$DUMP_PATH"
 
-# Encrypt before off-host upload
-gpg --symmetric --cipher-algo AES256 "$DUMP_PATH"
+# Encrypt before off-host upload. In production, prefer the provider KMS
+# process documented in section 2.4; this GPG path is a controlled fallback.
+gpg --symmetric --cipher-algo AES256 --output "$DUMP_PATH.gpg" "$DUMP_PATH"
 ```
 
-Verify the dump is non-empty and the file's md5 matches a sidecar.
+Verify the encrypted dump is non-empty and record a SHA-256 checksum. The
+checksum detects transfer corruption; it is not a substitute for encryption
+or an authenticated signature.
 
 ```bash
 ls -lah "$DUMP_PATH".gpg
-md5sum "$DUMP_PATH".gpg | tee "$DUMP_PATH".gpg.md5
+sha256sum "$DUMP_PATH".gpg | tee "$DUMP_PATH".gpg.sha256
 ```
 
 ### 2.3 Automated nightly dump (cron or scheduler)
@@ -92,11 +95,67 @@ set -euo pipefail
 DUMP_PATH=/var/backups/splitnaira/$(date -u +%Y%m%dT%H%M%SZ).dump
 pg_dump "$DATABASE_URL" --format=custom --no-owner --no-privileges \
   --single-transaction --file="$DUMP_PATH"
-gpg --batch --yes --passphrase-file /etc/splitnaira/dump-passphrase \
+# PASSPHRASE_FILE must be injected by the approved secret manager onto
+# ephemeral storage; never bake it into the image or persist it on disk.
+gpg --batch --yes --pinentry-mode loopback --passphrase-file "$PASSPHRASE_FILE" \
   --symmetric --cipher-algo AES256 "$DUMP_PATH"
 rm "$DUMP_PATH"
 aws s3 cp "$DUMP_PATH".gpg "s3://splitnaira-backups/$(date -u +%Y/%m/%d)/"
 ```
+
+### 2.4 Encryption, key custody, and rotation
+
+Production backups must be encrypted before they leave the database provider's
+boundary, including logical dumps and exports. Prefer the storage/provider
+backup integration with a customer-managed KMS key and envelope encryption:
+the KMS key protects per-backup data-encryption keys, while the backup service
+performs encryption without exposing the key material to the application.
+Enable encrypted snapshots as well as encrypted object storage; storage
+encryption is defense in depth and does not replace client-side encryption of
+logical dump files. Verify the selected key and encryption status in the
+provider control plane rather than assuming defaults.
+
+If GPG is used where managed encryption is unavailable, use AES-256 with a
+strong, randomly generated secret supplied by the approved secret manager.
+Use a distinct key per environment; do not reuse database credentials or
+store a key/passphrase beside its dump. Automation may use
+`--passphrase-file` only when that file is injected at runtime onto protected
+ephemeral storage with restrictive permissions and is never included in
+images, source control, logs, shell history, or backup storage. Delete the
+plaintext dump immediately after successful encryption and verify the
+encrypted object and its SHA-256 checksum before upload. Restrict access to
+the encryption key separately from access to the backup bucket.
+
+Key custody requirements:
+
+- Assign key administration and backup/restore operation to separate
+  least-privilege roles. Require MFA and approval from a second authorized
+  operator for production key-policy changes and break-glass restores.
+- Grant the backup service only encrypt/data-key permissions. Limit decrypt
+  permission to the restore role, with time-bound elevation and provider
+  audit logging. Do not grant broad key-administration rights to application
+  runtime identities.
+- Keep an inventory linking each backup/snapshot to its environment, creation
+  time, encryption key identifier and key version, deploy SHA, and retention
+  expiry. Store this metadata with the backup, but never store secrets or
+  passphrases there.
+- Keep key material and recovery procedures in the organization's approved
+  KMS/HSM or secret-management system. Maintain a separately controlled
+  break-glass recovery path and test that authorized restore operators can
+  use it without sharing secrets through chat or tickets.
+
+Rotate production backup keys at least annually, on suspected compromise, and
+when an authorized operator or provider boundary changes; follow a stricter
+organizational or regulatory schedule when applicable. Create a new key
+version, encrypt new backups with it, and record the effective date and
+version. For retained archives, either re-encrypt them under the new key
+without leaving plaintext copies, or retain the old key version in decrypt-only
+state until every backup encrypted with it has expired (including legal holds).
+Do not disable or destroy an old key while any retained backup still depends
+on it. After rotation, perform a restore drill using both the new key and a
+retained old-key archive, verify the restored data, and record the result.
+Immediately disable compromised versions only after ensuring retained
+backups have a recoverable replacement encryption.
 
 ## 3. Restore drill
 
@@ -118,10 +177,23 @@ docker run --rm --detach \
 
 ### 3.2 Decrypt and restore
 
+Before decrypting, obtain incident/change approval and use the dedicated,
+time-bound restore identity. Confirm that the chosen key version is authorized
+for the selected backup and that the encrypted object checksum matches its
+recorded SHA-256 value. Restore into an isolated, private disposable database;
+do not make a restored copy internet-accessible or route production traffic
+to it until verification and access review pass. Fetch decryption material
+from KMS/secret management at restore time; never copy it into the backup
+bucket, command history, or a ticket. Record the operator, approver, backup
+identifier, key version, target database, and restore outcome in the incident
+record. Keep decryption permissions separate from routine backup creation.
+
 ```bash
 DUMP_GPG=/var/backups/splitnaira/chosen.dump.gpg
 DUMP_PATH=/tmp/splitnaira-restore.dump
-gpg --batch --yes --passphrase-file /etc/splitnaira/dump-passphrase \
+# Inject PASSPHRASE_FILE from the approved secret manager onto protected
+# ephemeral storage; use KMS-native decrypt when the backup uses KMS.
+gpg --batch --yes --pinentry-mode loopback --passphrase-file "$PASSPHRASE_FILE" \
   --decrypt "$DUMP_GPG" > "$DUMP_PATH"
 
 pg_restore \
@@ -263,7 +335,10 @@ gpg --symmetric --cipher-algo AES256 \
   /var/backups/splitnaira/<stamp>.dump
 
 # Verify a dump
-gpg --decrypt /var/backups/splitnaira/<stamp>.dump.gpg > /tmp/check.dump
+sha256sum -c /var/backups/splitnaira/<stamp>.dump.gpg.sha256
+gpg --batch --yes --pinentry-mode loopback \
+  --passphrase-file "$PASSPHRASE_FILE" \
+  --decrypt /var/backups/splitnaira/<stamp>.dump.gpg > /tmp/check.dump
 pg_restore --list /tmp/check.dump | head -50
 
 # Restore into a disposable DB
