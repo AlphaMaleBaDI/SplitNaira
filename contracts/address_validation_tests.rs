@@ -365,7 +365,7 @@ fn create_project_with_overallocated_split_returns_invalid_split() {
         collaborator(&env, Address::generate(&env), "Bob", 6000),
     ];
 
-    let id = project_id(&env, "over_split");
+    let id = project_id(&env, "overflow_split");
 
     assert_invalid_collaborators(
         &env,
@@ -373,6 +373,110 @@ fn create_project_with_overallocated_split_returns_invalid_split() {
         &token,
         &id,
         &collaborators,
-        SplitError::InvalidSplit,
+        SplitError::ArithmeticOverflow,
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Malformed inputs leave state unchanged (issue #1253)
+// -----------------------------------------------------------------------------
+
+/// A sweep of malformed collaborator inputs must all fail validation and
+/// leave contract state untouched: no project is created, the project count
+/// does not move, and no partially-written project ID becomes visible.
+#[test]
+fn malformed_participant_inputs_leave_contract_state_unchanged() {
+    let (env, client, token) = setup();
+
+    let cases: Vec<(Symbol, Vec<Collaborator>, SplitError)> = {
+        let mut v = Vec::new(&env);
+
+        // Too few: single collaborator.
+        v.push_back((
+            Symbol::new(&env, "malformed_solo"),
+            vec![
+                &env,
+                collaborator(&env, Address::generate(&env), "Solo", 10_000),
+            ],
+            SplitError::TooFewCollaborators,
+        ));
+
+        // Too few: empty list.
+        v.push_back((
+            Symbol::new(&env, "malformed_empty"),
+            Vec::new(&env),
+            SplitError::TooFewCollaborators,
+        ));
+
+        // Zero share.
+        v.push_back((
+            Symbol::new(&env, "malformed_zero"),
+            vec![
+                &env,
+                collaborator(&env, Address::generate(&env), "Zero", 0),
+                collaborator(&env, Address::generate(&env), "Full", 10_000),
+            ],
+            SplitError::ZeroShare,
+        ));
+
+        // Duplicate address.
+        let dup = Address::generate(&env);
+        v.push_back((
+            Symbol::new(&env, "malformed_duplicate"),
+            vec![
+                &env,
+                collaborator(&env, dup.clone(), "First", 5_000),
+                collaborator(&env, dup, "Second", 5_000),
+            ],
+            SplitError::DuplicateCollaborator,
+        ));
+
+        // Under-allocated total.
+        v.push_back((
+            Symbol::new(&env, "malformed_under"),
+            vec![
+                &env,
+                collaborator(&env, Address::generate(&env), "A", 3_000),
+                collaborator(&env, Address::generate(&env), "B", 3_000),
+            ],
+            SplitError::InvalidSplit,
+        ));
+
+        // Over-allocated total.
+        v.push_back((
+            Symbol::new(&env, "malformed_over"),
+            vec![
+                &env,
+                collaborator(&env, Address::generate(&env), "A", 7_000),
+                collaborator(&env, Address::generate(&env), "B", 7_000),
+            ],
+            SplitError::InvalidSplit,
+        ));
+
+        v
+    };
+
+    let before_count = client.get_project_count();
+
+    for (id, collaborators, expected) in cases.iter() {
+        let result = try_create_project(&env, &client, &token, &id, &collaborators);
+        assert_eq!(
+            result,
+            Err(Ok(expected)),
+            "case {:?} must fail with {:?}",
+            id,
+            expected
+        );
+        assert!(
+            !client.project_exists(&id),
+            "case {:?} must not create a project",
+            id
+        );
+    }
+
+    assert_eq!(
+        client.get_project_count(),
+        before_count,
+        "malformed inputs must not move the project count"
     );
 }
