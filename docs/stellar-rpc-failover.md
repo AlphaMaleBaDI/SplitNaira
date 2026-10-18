@@ -14,9 +14,9 @@ deployment secret store; do not commit credential-bearing URLs.
   request uses the next eligible configured endpoint.
 - A successful, validated response clears that endpoint's failure streak and
   quarantine.
-- If all endpoints are quarantined, the policy permits a bounded retry against
-  the endpoint whose cooldown expires first. Normal response validation still
-  applies; this is not permission to accept cached or stale data.
+- If all endpoints are quarantined, the policy probes the endpoint whose
+  cooldown expires first to avoid a permanent dead end. Normal response
+  validation still applies; this is not permission to accept cached or stale data.
 - Provider health is process-local. Each backend instance tracks its own
   provider state; no external health database is required.
 - The existing RPC retry budget remains in force. Failover does not increase
