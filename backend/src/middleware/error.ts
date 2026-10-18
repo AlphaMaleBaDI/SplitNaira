@@ -17,12 +17,24 @@ function formatZodError(err: ZodError) {
   };
 }
 
-export function notFoundHandler(req: Request, res: Response) {
+/**
+ * Issue #1460: stable unknown-route response contract.
+ *
+ * The body is intentionally static. The previous implementation echoed the
+ * request line (`Route not found: ${req.method} ${req.originalUrl}`), which
+ * (a) turned the response into an attacker-controlled reflection surface and
+ * (b) leaked internal routing detail. Clients branch on the machine-readable
+ * `error`/`code` fields, never on the message, so the message is fixed.
+ *
+ * Must stay byte-for-byte in step with docs/runbooks/api-evolution-runbook.md
+ * ("Unknown-route contract").
+ */
+export function notFoundHandler(_req: Request, res: Response) {
   const requestId = res.locals.requestId ?? randomUUID();
   res.status(404).json({
     error: "not_found",
     code: "NOT_FOUND",
-    message: `Route not found: ${req.method} ${req.originalUrl}`,
+    message: "The requested resource does not exist.",
     requestId,
     details: {},
   });

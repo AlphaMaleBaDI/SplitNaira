@@ -122,7 +122,7 @@ usersRouter.post("/login", async (req: Request, res: Response, next: NextFunctio
       isActive: user.isActive,
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),
-      token
+      token: signToken(user.walletAddress, user.sessionVersion ?? 0)
     });
   } catch (error) {
     return next(error);

@@ -1,0 +1,99 @@
+# API Surface Contracts
+
+This document describes the cross-cutting contracts the backend API guarantees
+to clients, and how they are enforced in tests. It complements the generated
+OpenAPI document served at `/api/openapi.json`.
+
+## Unknown-route (404) contract
+
+Any request that does not match a mounted route — wrong path, wrong method, or
+a deleted endpoint — returns the same stable, machine-readable 404 body. The
+response never echoes the request line, query string, request body, stack
+traces, or internal routing details.
+
+```json
+{
+  "error": "not_found",
+  "code": "NOT_FOUND",
+  "message": "The requested resource does not exist.",
+  "requestId": "b6f1a2d4-8c3e-4a1b-9f2e-6d5c7a8b9c0d",
+  "details": {}
+}
+```
+
+Clients must branch on `code` (`NOT_FOUND`), never on `message`. The
+implementation lives in `backend/src/middleware/error.ts` (`notFoundHandler`)
+and is pinned by `backend/src/middleware/__tests__/unknown-route-contract.test.ts`.
+
+## Deprecation and Sunset headers
+
+Endpoints scheduled for removal advertise it on every response so clients can
+migrate before the sunset date:
+
+| Header        | Standard    | Meaning                                                            |
+| :------------ | :---------- | :----------------------------------------------------------------- |
+| `Deprecation` | RFC 9745    | IMF-fixdate the endpoint became deprecated.                        |
+| `Sunset`      | RFC 8594    | IMF-fixdate after which the endpoint may stop responding.          |
+| `Link`        | RFC 8288    | `<replacement>; rel="deprecation"` — where to migrate.             |
+
+Example response headers:
+
+```
+Deprecation: Thu, 01 Jan 2026 00:00:00 GMT
+Sunset: Fri, 01 Jan 2027 00:00:00 GMT
+Link: </health/ready>; rel="deprecation"
+```
+
+Deprecations are declared in `API_DEPRECATIONS` in
+`backend/src/middleware/deprecation.ts`. The registry is validated at boot: an
+invalid date, or a `sunset` that is not after `deprecatedAt`, fails startup
+rather than emitting a misleading header.
+
+### Registering a new deprecation
+
+1. Add an entry to `API_DEPRECATIONS` with `key`, `deprecatedAt`, `sunset`,
+   `replacement` and a short `documentation` note.
+2. Apply `deprecationHeaders("<key>")` to the route, e.g.
+
+   ```ts
+   router.get("/legacy-thing", deprecationHeaders("legacy-thing"), handler);
+   ```
+
+3. Add a case to `backend/src/middleware/__tests__/deprecation.test.ts`.
+3. Note the removal window in the changelog/release notes.
+
+`GET /health` (the backwards-compatibility alias for `GET /health/ready`) is
+the first registered deprecation.
+
+## Per-route rate limits
+
+Route groups have deliberately distinct budgets (auth, admin, read, write,
+SSE). The policies, env overrides, response headers and `429` payload are
+documented in [rate-limiting-guidance.md](./rate-limiting-guidance.md).
+
+## Contract tests
+
+`backend/src/__tests__/api-contract.test.ts` runs the real Express app and
+checks the responses against the generated OpenAPI document:
+
+- the generated document is a valid OpenAPI 3.0 document,
+- the operations the clients depend on are documented,
+- `GET /api/openapi.json` serves exactly the generated spec,
+- every documented operation declares at least one `2xx` response,
+- representative responses only contain documented fields (a new, accidental
+  field fails the test; the few known additive fields are listed explicitly in
+  the test), and
+- the unknown-route and validation-error envelopes match the documented shape
+  and never leak stack traces.
+
+Run it with:
+
+```bash
+npm test -w backend -- api-contract.test.ts
+```
+
+## Related
+
+- [Rate-limiting guidance](./rate-limiting-guidance.md)
+- [API Evolution Runbook](./runbooks/api-evolution-runbook.md)
+- [Generated OpenAPI document](./openapi.yaml)

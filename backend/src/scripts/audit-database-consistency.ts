@@ -179,6 +179,30 @@ async function checkDuplicateTransactionHashes(
   ];
 }
 
+/**
+ * Issue #1474: Duplicate external transaction reference detection.
+ * Checks for external transaction hashes or idempotency reference collisions.
+ */
+async function checkDuplicateExternalTransactionReferences(
+  dataSource: DataSource
+): Promise<ConsistencyFinding[]> {
+  const transactions = await dataSource.getRepository(TransactionRecord).find();
+  const extRefs = transactions
+    .map((t) => (t as unknown as { externalReference?: string }).externalReference)
+    .filter((ref): ref is string => Boolean(ref));
+  const duplicates = findDuplicateValues(extRefs);
+  if (duplicates.length === 0) return [];
+  return [
+    {
+      checkId: "duplicate-external-transaction-reference",
+      severity: "critical",
+      message: `${duplicates.length} external transaction reference(s) appear on more than one transaction row.`,
+      count: duplicates.length,
+      sampleIds: duplicates.slice(0, SAMPLE_LIMIT),
+    },
+  ];
+}
+
 async function checkDuplicateNotificationEventKeys(
   dataSource: DataSource
 ): Promise<ConsistencyFinding[]> {
@@ -264,6 +288,10 @@ export async function runDatabaseConsistencyAudit(
     ["transaction-ledger-reconciliation", () => runOrphanedTransactionsCheck(dataSource)],
     ["duplicate-wallet-address", () => checkDuplicateWalletAddresses(dataSource)],
     ["duplicate-transaction-hash", () => checkDuplicateTransactionHashes(dataSource)],
+    [
+      "duplicate-external-transaction-reference",
+      () => checkDuplicateExternalTransactionReferences(dataSource),
+    ],
     ["duplicate-notification-event-key", () => checkDuplicateNotificationEventKeys(dataSource)],
     ["duplicate-notification-preference", () => checkDuplicateNotificationPreferences(dataSource)],
     [

@@ -87,7 +87,28 @@ The primary split actions emit structured lifecycle events through `frontend/src
 
 ---
 
-## 5. Deployment-Safe & Rollback Guidelines
+## 4b. Duplicate Submission Protection (#1266)
+
+Payment and split actions (create, deposit, distribute, lock) go through `useSubmissionGuard` (`src/hooks/useSubmissionGuard.ts`) and the helpers in `src/lib/submission-guard.ts`.
+
+- **Single flight per action.** `run(action, task)` takes a synchronous lock held in a ref. A double click, a repeated Enter press, or a "Retry" fired before React re-renders can't start a second submission, even though the button's `disabled` attribute hasn't updated yet. The lock is released when the task settles.
+- **Idempotency key for create.** `POST /splits` is sent with an `Idempotency-Key`. The key is reused while the payload is unchanged, so a retry after a build or signing failure gets the backend's replayed response. It's rotated as soon as the transaction is submitted, because the built XDR's sequence number is then spent, and also after a `409 idempotency_key_conflict`. With a key on the request, the API client's automatic 5xx retries are safe too.
+- **Definitive vs. unconfirmed failures.** Wallet rejections, build errors, RPC rejections and ledger failures are definitive, so controls come back. A poll timeout (`TimeoutError`) means the transaction reached the network with an unknown outcome. The action then stays disabled, and a "Waiting for network confirmation" notice offers **Check status**:
+  - `SUCCESS` or `FAILED` from `getTransaction` unblocks the action.
+  - `NOT_FOUND` keeps it blocked until the transaction's validity window (300s plus 60s margin) has passed, after which it can no longer land.
+  - RPC errors keep it blocked.
+- **Navigation.** While a submission is in flight or unconfirmed, leaving the page triggers the browser's "Leave site?" prompt.
+
+## 4c. Accessible Form Errors (#1267)
+
+The split creation form and the deposit form follow the error-summary pattern:
+
+- **Errors are tied to their fields.** Every invalid field sets `aria-invalid="true"` and points `aria-describedby` at its error text. A share-total error is also linked from every share field (`#allocation-status`). `TokenPicker` accepts an `id` so a summary link can target it.
+- **Submit buttons stay focusable.** They are `aria-disabled` while the form is invalid, rather than `disabled`, so keyboard and screen reader users can reach them and find out what's wrong. They are truly `disabled` only while a submission is in flight.
+- **Summary for multiple errors.** A failed submit with two or more errors shows `FormErrorSummary` (`src/components/FormErrorSummary.tsx`). Focus moves to it, it's announced by its heading ("There are N problems with this form"), and each item links to and focuses its field. With a single error, focus goes straight to that field.
+- **Focus only moves on submit.** It never moves while the user types. `useForm` uses `shouldFocusError: false` so react-hook-form doesn't compete with the summary for focus.
+
+
 
 ### Pre-Deployment Verification Checklist
 1.  **Verify Sentry Webpack Plugin:** During `npm run build`, verify that Next.js automatically generates and uploads source maps to Sentry. Ensure `SENTRY_AUTH_TOKEN` is configured in CI.

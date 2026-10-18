@@ -61,6 +61,15 @@ import { CreateSplitWizard } from "./create/CreateSplitWizard";
 import { ManageSplitView } from "./manage/ManageSplitView";
 import { ProjectsList } from "./projects/ProjectsList";
 import type { LoadingBarFlags } from "./LoadingBar";
+import { UnconfirmedSubmissionNotice } from "./UnconfirmedSubmissionNotice";
+import { useSubmissionGuard } from "@/hooks/useSubmissionGuard";
+import {
+  IdempotencyKeyStore,
+  isIdempotencyConflict,
+  isUnconfirmedSubmission,
+  resolveUnconfirmedSubmission,
+  type UnconfirmedSubmission,
+} from "@/lib/submission-guard";
 
 interface CollaboratorInput {
   id: string;
@@ -115,6 +124,19 @@ const SEEDED_PROJECT_IDS = [
   "cultural_resonance_05",
 ];
 
+const MAX_TOKEN_DECIMALS = 7;
+
+/** Returns a message for an invalid deposit amount, or null when it's valid (#1267). */
+export function getDepositAmountError(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return "Enter an amount to deposit.";
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return "Enter an amount greater than 0.";
+  const decimals = value.includes(".") ? value.split(".")[1].length : 0;
+  if (decimals > MAX_TOKEN_DECIMALS) return `Use at most ${MAX_TOKEN_DECIMALS} decimal places.`;
+  return null;
+}
+
 export function SplitApp({
   onLoadingFlagsChange,
   isWriteDisabled = false,
@@ -140,6 +162,9 @@ export function SplitApp({
   } = useForm<CreateSplitFormValues>({
     defaultValues: getInitialCreateFormValues(),
     mode: "onChange",
+    // The wizard decides where focus goes after a failed submit: to the
+    // error summary when there are several errors (#1267).
+    shouldFocusError: false,
   });
   const {
     fields: collaboratorFields,
@@ -157,6 +182,11 @@ export function SplitApp({
   const [createRetryError, setCreateRetryError] = useState<string | null>(null);
   const [lastCreatePayload, setLastCreatePayload] = useState<CreateSplitFormValues | null>(null);
   const latestTxHash = txHash ?? receipt?.hash ?? null;
+  // Duplicate-submission protection (#1266): synchronous single-flight lock
+  // per action, plus one idempotency key per logical create attempt.
+  const submissionGuard = useSubmissionGuard();
+  const createKeyStoreRef = useRef(new IdempotencyKeyStore());
+  const [checkingUnconfirmed, setCheckingUnconfirmed] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<"dashboard" | "create" | "manage" | "projects">("dashboard");
   const [createStep, setCreateStep] = useState(1);
@@ -168,6 +198,8 @@ export function SplitApp({
   const [isLocking, setIsLocking] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [depositAmount, setDepositAmount] = useState("");
+  const [depositAttempted, setDepositAttempted] = useState(false);
+  const depositAmountInputRef = useRef<HTMLInputElement | null>(null);
   const [isDepositing, setIsDepositing] = useState(false);
   const [history, setHistory] = useState<ProjectHistoryItem[]>([]);
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
@@ -535,8 +567,49 @@ export function SplitApp({
   }
 
   function onRetryCreateSubmission() {
-    if (!lastCreatePayload || isSubmitting) return;
+    if (!lastCreatePayload) return;
     void onSubmit(lastCreatePayload);
+  }
+
+  /**
+   * If a transaction reached the network but its outcome is unknown, keep the
+   * action blocked instead of letting a retry submit it again (#1266).
+   */
+  function blockIfUnconfirmed(action: string, error: unknown, submitted: UnconfirmedSubmission | null) {
+    if (submitted && isUnconfirmedSubmission(error)) {
+      submissionGuard.markUnconfirmed(action, submitted);
+    }
+  }
+
+  async function onCheckUnconfirmed(action: string) {
+    const submission = submissionGuard.unconfirmed[action];
+    if (!submission || checkingUnconfirmed) return;
+    setCheckingUnconfirmed(action);
+    try {
+      const outcome = await resolveUnconfirmedSubmission(createSorobanRpcServer(), submission);
+      if (outcome === "pending") {
+        notify.info("Still waiting for the network. Check again in a moment.");
+        return;
+      }
+      submissionGuard.clearUnconfirmed(action);
+      setReceipt((prev) =>
+        prev?.hash === submission.hash
+          ? outcome === "succeeded"
+            ? { ...prev, lifecycle: "success" }
+            : { ...prev, lifecycle: "failed", failureReason: outcome === "expired" ? "Transaction expired without confirming." : "Transaction failed on ledger." }
+          : prev,
+      );
+      if (outcome === "succeeded") {
+        notify.success("Transaction confirmed.");
+        if (fetchedProject) await onFetchProject();
+      } else if (outcome === "failed") {
+        notify.error("The transaction failed on ledger. You can try again.");
+      } else {
+        notify.info("The transaction expired without confirming. You can try again.");
+      }
+    } finally {
+      setCheckingUnconfirmed(null);
+    }
   }
 
   function updateEditCollaborator(id: string, patch: Partial<CollaboratorInput>) {
@@ -563,7 +636,10 @@ export function SplitApp({
     );
   }
 
-  const onSubmit: SubmitHandler<CreateSplitFormValues> = async (data) => {
+  const onSubmit: SubmitHandler<CreateSplitFormValues> = (data) =>
+    submissionGuard.run("create", () => runCreate(data));
+
+  const runCreate = async (data: CreateSplitFormValues) => {
     if (!wallet.connected || !wallet.address) {
       notify.error("Connect your wallet first.");
       return;
@@ -585,8 +661,9 @@ export function SplitApp({
       projectId: data.projectId.trim(),
       props: { collaboratorCount: collaboratorPayload.length },
     });
+    let submitted: UnconfirmedSubmission | null = null;
     try {
-      const buildResponse = await buildCreateSplitXdr({
+      const createPayload = {
         owner: wallet.address,
         projectId: data.projectId.trim(),
         title: data.title.trim(),
@@ -594,6 +671,11 @@ export function SplitApp({
         token: data.token.trim(),
         collaborators: collaboratorPayload,
         expiresAt: data.expiresAt ? new Date(data.expiresAt).toISOString() : undefined,
+      };
+      // Same payload, same key: a retry after a build/sign failure gets the
+      // backend's cached response instead of a second build.
+      const buildResponse = await buildCreateSplitXdr(createPayload, {
+        idempotencyKey: createKeyStoreRef.current.keyFor(createPayload),
       });
       const signedTxXdr = await signWithWallet(
         buildResponse.xdr,
@@ -604,6 +686,10 @@ export function SplitApp({
 
       await submitSorobanTransactionAndPoll(server, transaction, {
         afterSubmitted: (hash) => {
+          submitted = { hash, submittedAt: Date.now() };
+          // The built XDR's sequence number is now spent, so any later
+          // attempt must build a fresh transaction under a new key.
+          createKeyStoreRef.current.reset();
           telemetry.submitted(hash);
           setTxHash(hash);
           setReceipt({
@@ -633,6 +719,8 @@ export function SplitApp({
       }
     } catch (error) {
       telemetry.failed(error);
+      if (isIdempotencyConflict(error)) createKeyStoreRef.current.reset();
+      blockIfUnconfirmed("create", error, submitted);
       const message =
         error instanceof Error ? error.message : "Failed to create split project.";
       setCreateRetryError(message);
@@ -682,7 +770,9 @@ export function SplitApp({
     }
   };
 
-  const onDistribute = async () => {
+  const onDistribute = () => submissionGuard.run("distribute", runDistribute);
+
+  const runDistribute = async () => {
     if (!fetchedProject || !wallet.address) return;
     setIsSubmitting(true);
     setShowDistributeModal(false);
@@ -690,6 +780,7 @@ export function SplitApp({
       projectId: fetchedProject.projectId,
       props: { round: fetchedProject.distributionRound + 1 },
     });
+    let submitted: UnconfirmedSubmission | null = null;
     try {
       const { xdr, metadata } = await buildDistributeXdr(fetchedProject.projectId, wallet.address);
       const signedTxXdr = await signWithWallet(xdr, metadata.networkPassphrase);
@@ -698,6 +789,7 @@ export function SplitApp({
 
       await submitSorobanTransactionAndPoll(server, transaction, {
         afterSubmitted: (hash) => {
+          submitted = { hash, submittedAt: Date.now() };
           telemetry.submitted(hash);
           setTxHash(hash);
           setReceipt({
@@ -718,6 +810,7 @@ export function SplitApp({
       await onFetchProject();
     } catch (error) {
       telemetry.failed(error);
+      blockIfUnconfirmed("distribute", error, submitted);
       const message = error instanceof Error ? error.message : "Distribution failed.";
       setReceipt((prev) =>
         prev?.lifecycle === "confirming" && prev.action === "distribute"
@@ -739,10 +832,13 @@ export function SplitApp({
     return Boolean(fetchedProject && !fetchedProject.locked && isProjectOwner);
   }, [fetchedProject, isProjectOwner]);
 
-  const onLockProject = async () => {
+  const onLockProject = () => submissionGuard.run("lock", runLockProject);
+
+  const runLockProject = async () => {
     if (!fetchedProject || !wallet.address) return;
     setIsLocking(true);
     const telemetry = trackSplitLifecycle("lock", { projectId: fetchedProject.projectId });
+    let submitted: UnconfirmedSubmission | null = null;
     try {
       const { xdr, metadata } = await buildLockProjectXdr(fetchedProject.projectId, wallet.address);
       const signedTxXdr = await signWithWallet(xdr, metadata.networkPassphrase);
@@ -751,6 +847,7 @@ export function SplitApp({
 
       await submitSorobanTransactionAndPoll(server, transaction, {
         afterSubmitted: (hash) => {
+          submitted = { hash, submittedAt: Date.now() };
           telemetry.submitted(hash);
           setTxHash(hash);
           setReceipt({
@@ -771,6 +868,7 @@ export function SplitApp({
       notify.success("Project locked permanently.");
     } catch (error) {
       telemetry.failed(error);
+      blockIfUnconfirmed("lock", error, submitted);
       const message = error instanceof Error ? error.message : "Failed to lock project.";
       setReceipt((prev) =>
         prev?.lifecycle === "confirming" && prev.action === "lock"
@@ -783,10 +881,33 @@ export function SplitApp({
     }
   };
 
-  const onDeposit = async () => {
+  const onDeposit = () => submissionGuard.run("deposit", runDeposit);
+
+  // Deposit amount validation (#1267). Shown once the user submits, or as
+  // soon as a non-empty value is invalid.
+  const depositAmountError = getDepositAmountError(depositAmount);
+  const showDepositAmountError = Boolean(depositAmountError) && (depositAttempted || depositAmount.trim() !== "");
+
+  const onConfirmDeposit = () => {
+    if (depositAmountError) {
+      setDepositAttempted(true);
+      depositAmountInputRef.current?.focus();
+      return;
+    }
+    void onDeposit();
+  };
+
+  const closeDepositModal = () => {
+    setShowDepositModal(false);
+    setDepositAmount("");
+    setDepositAttempted(false);
+  };
+
+  const runDeposit = async () => {
     if (!fetchedProject || !wallet.address || !depositAmount) return;
     setIsDepositing(true);
     const telemetry = trackSplitLifecycle("deposit", { projectId: fetchedProject.projectId });
+    let submitted: UnconfirmedSubmission | null = null;
     try {
       const amountInStroops = Math.floor(Number.parseFloat(depositAmount) * 10_000_000);
       const { xdr, metadata } = await buildDepositXdr(
@@ -800,6 +921,7 @@ export function SplitApp({
 
       await submitSorobanTransactionAndPoll(server, transaction, {
         afterSubmitted: (hash) => {
+          submitted = { hash, submittedAt: Date.now() };
           telemetry.submitted(hash);
           setTxHash(hash);
           setReceipt({
@@ -816,12 +938,12 @@ export function SplitApp({
       setReceipt((prev) =>
         prev?.action === "deposit" && prev.hash ? { ...prev, lifecycle: "success" } : prev,
       );
-      setShowDepositModal(false);
-      setDepositAmount("");
+      closeDepositModal();
       notify.success("Deposit successful!");
       await onFetchProject();
     } catch (error) {
       telemetry.failed(error);
+      blockIfUnconfirmed("deposit", error, submitted);
       const message = error instanceof Error ? error.message : "Deposit failed.";
       setReceipt((prev) =>
         prev?.lifecycle === "confirming" && prev.action === "deposit"
@@ -1049,6 +1171,7 @@ export function SplitApp({
       if (e.key === "Escape") {
         setShowLockModal(false);
         setShowDepositModal(false);
+        setDepositAttempted(false);
       }
     };
     document.addEventListener("keydown", handleEscape);
@@ -1159,6 +1282,12 @@ export function SplitApp({
           ))}
         </nav>
 
+        <UnconfirmedSubmissionNotice
+          submissions={submissionGuard.unconfirmed}
+          checkingAction={checkingUnconfirmed}
+          onCheck={(action) => void onCheckUnconfirmed(action)}
+        />
+
         {/* Content Tabs */}
         {activeTab === "dashboard" ? (
           <DashboardView
@@ -1221,7 +1350,7 @@ export function SplitApp({
             collaboratorValidationErrors={collaboratorValidationErrors}
             totalBasisPoints={totalBasisPoints}
             isValid={isValid}
-            sorobanSplitFlowBusy={sorobanSplitFlowBusy}
+            sorobanSplitFlowBusy={sorobanSplitFlowBusy || submissionGuard.isBlocked("create")}
             isSubmitting={isSubmitting}
             receipt={receipt}
             latestTxHash={latestTxHash}
@@ -1258,6 +1387,7 @@ export function SplitApp({
             projectFetchError={projectFetchError}
             isProjectStale={isProjectStale}
             setShowDistributeModal={setShowDistributeModal}
+            setShowDepositModal={setShowDepositModal}
             adminStatus={adminStatus}
             receipt={receipt}
             getExplorerUrl={getExplorerUrl}
@@ -1331,7 +1461,8 @@ export function SplitApp({
             <div className="mt-10 flex flex-col gap-4">
               <button
                 onClick={onDistribute}
-                disabled={sorobanSplitFlowBusy || isWriteDisabled}
+                disabled={sorobanSplitFlowBusy || isWriteDisabled || submissionGuard.isBlocked("distribute")}
+                aria-busy={submissionGuard.inFlight.has("distribute")}
                 className="premium-button w-full rounded-2xl bg-greenBright py-5 text-xs font-black uppercase tracking-[0.3em] text-[#0a0a09]"
               >
                 {isSubmitting
@@ -1419,7 +1550,8 @@ export function SplitApp({
             <div className="mt-10 flex flex-col gap-4">
               <button
                 onClick={onLockProject}
-                disabled={sorobanSplitFlowBusy}
+                disabled={sorobanSplitFlowBusy || submissionGuard.isBlocked("lock")}
+                aria-busy={submissionGuard.inFlight.has("lock")}
                 className="premium-button w-full rounded-2xl bg-red-500 py-5 text-xs font-black uppercase tracking-[0.3em] text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isLocking
@@ -1462,6 +1594,7 @@ export function SplitApp({
                   Amount (in tokens)
                 </label>
                 <input
+                  ref={depositAmountInputRef}
                   id="deposit-amount"
                   type="number"
                   min="0"
@@ -1470,8 +1603,15 @@ export function SplitApp({
                   onChange={(e) => setDepositAmount(e.target.value)}
                   placeholder="0.0"
                   disabled={isDepositing}
+                  aria-invalid={showDepositAmountError}
+                  aria-describedby={showDepositAmountError ? "deposit-amount-error" : undefined}
                   className="glass-input w-full rounded-2xl px-5 py-4 text-sm disabled:opacity-50"
                 />
+                {showDepositAmountError && (
+                  <p id="deposit-amount-error" className="text-xs font-medium text-red-400">
+                    {depositAmountError}
+                  </p>
+                )}
               </div>
               <div className="rounded-2xl border border-blue-400/40 bg-blue-500/10 p-4">
                 <p className="text-xs font-bold uppercase tracking-widest text-blue-300">Deposit Summary</p>
@@ -1496,9 +1636,13 @@ export function SplitApp({
             <div className="mt-10 flex flex-col gap-4">
               <button
                 type="button"
-                onClick={onDeposit}
-                disabled={sorobanSplitFlowBusy || !depositAmount || Number.parseFloat(depositAmount) <= 0}
-                className="premium-button w-full rounded-2xl bg-blue-500 py-5 text-xs font-black uppercase tracking-[0.3em] text-white disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={onConfirmDeposit}
+                disabled={sorobanSplitFlowBusy || submissionGuard.isBlocked("deposit")}
+                // Focusable while the amount is invalid, so pressing it can
+                // explain why (#1267); truly disabled while busy (#1266).
+                aria-disabled={Boolean(depositAmountError) || sorobanSplitFlowBusy || submissionGuard.isBlocked("deposit")}
+                aria-busy={submissionGuard.inFlight.has("deposit")}
+                className="premium-button w-full rounded-2xl bg-blue-500 py-5 text-xs font-black uppercase tracking-[0.3em] text-white disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
               >
                 {isDepositing
                   ? receipt?.lifecycle === "confirming" && receipt.action === "deposit"
@@ -1508,10 +1652,7 @@ export function SplitApp({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setShowDepositModal(false);
-                  setDepositAmount("");
-                }}
+                onClick={closeDepositModal}
                 disabled={sorobanSplitFlowBusy}
                 className="premium-button w-full rounded-2xl border border-white/10 py-5 text-xs font-bold uppercase tracking-[0.2em] text-muted hover:bg-white/5 hover:text-ink"
               >

@@ -14,7 +14,9 @@ import {
   registerInvitation,
 } from "../services/collaboration/invitation-registry.js";
 import { createHash } from "node:crypto";
-
+import { IsNull } from "typeorm";
+import { getMaxSessionVersionForEmail, revokeSessionsForEmail } from "../services/session-revocation.js";
+import { verificationResendCooldown } from "../services/verification-resend-cooldown.js";
 
 export const authEmailRouter = Router();
 
@@ -26,6 +28,15 @@ const passwordResetRequestSchema = z.object({
 const passwordResetConfirmSchema = z.object({
   token: z.string().min(1),
   newPassword: z.string().min(8, "Password must be at least 8 characters"),
+});
+
+const emailVerificationResendSchema = z.object({
+  email: z.string().email("Invalid email format"),
+  verifyUrlBase: z.string().url().optional(),
+});
+
+const emailVerificationConfirmSchema = z.object({
+  token: z.string().min(1),
 });
 
 const invitationRequestSchema = z.object({
@@ -50,7 +61,10 @@ authEmailRouter.post("/password-reset/request", async (req: Request, res: Respon
       return res.status(202).json({ success: true });
     }
 
-    const token = signEmailFlowToken(email, "password_reset");
+    // Bind the token to the current session version so it can only be
+    // confirmed once (#1446); see /password-reset/confirm.
+    const sessionVersion = (await getMaxSessionVersionForEmail(email)) ?? 0;
+    const token = signEmailFlowToken(email, "password_reset", { sv: sessionVersion });
     const base = resetUrlBase ?? process.env.PASSWORD_RESET_URL_BASE ?? "https://app.splitnaira.com/reset-password";
     const resetUrl = `${base}?token=${encodeURIComponent(token)}`;
 
@@ -66,6 +80,18 @@ authEmailRouter.post("/password-reset/request", async (req: Request, res: Respon
   }
 });
 
+/**
+ * Confirms a password reset and revokes sessions (#1446).
+ *
+ * On success, every wallet JWT issued to every account registered with the
+ * token's email is invalidated (their `sessionVersion` is bumped), and no new
+ * session is issued: the user has to log in again. The bump also makes the
+ * reset token single-use, so a replayed or concurrent confirm with the same
+ * token gets `400 invalid_or_expired_token`.
+ *
+ * Not affected, on purpose: invitation and email verification tokens (they
+ * aren't sessions), and accounts registered under a different email.
+ */
 authEmailRouter.post("/password-reset/confirm", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { token } = passwordResetConfirmSchema.parse(req.body);
@@ -73,6 +99,97 @@ authEmailRouter.post("/password-reset/confirm", async (req: Request, res: Respon
     if (!payload) {
       return res.status(400).json({ error: "invalid_or_expired_token" });
     }
+
+    // Tokens issued before #1446 carry no `sv`; they were issued against version 0.
+    const revoked = await revokeSessionsForEmail(payload.email, payload.sv ?? 0);
+    if (revoked === 0) {
+      // Already used, superseded by a newer reset, or no account left for this email.
+      return res.status(400).json({ error: "invalid_or_expired_token" });
+    }
+
+    return res.status(200).json({ success: true, email: payload.email, sessionsRevoked: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+/**
+ * Sends (or re-sends) an email verification link, with a per-email server-side
+ * cooldown (#1443).
+ *
+ * - Within the cooldown: `429 resend_cooldown` with `retryAfterSeconds` in the
+ *   body and a `Retry-After` header.
+ * - Otherwise: `202 { success: true, retryAfterSeconds }`, where
+ *   `retryAfterSeconds` says how long until the next resend is allowed.
+ *
+ * The response, and the cooldown, are the same whether or not the email
+ * belongs to an account or is already verified, so this endpoint can't be
+ * used to find out which emails are registered.
+ */
+authEmailRouter.post("/email-verification/resend", async (req: Request, res: Response, next: NextFunction) => {
+  let acquired = false;
+  let email = "";
+  try {
+    const body = emailVerificationResendSchema.parse(req.body);
+    email = body.email;
+
+    // Claimed synchronously, before any await, so concurrent requests for
+    // the same email can't both pass the check.
+    const slot = verificationResendCooldown.tryAcquire(email);
+    if (!slot.ok) {
+      const retryAfterSeconds = Math.ceil(slot.retryAfterMs / 1000);
+      res.setHeader("Retry-After", String(retryAfterSeconds));
+      return res.status(429).json({
+        error: "resend_cooldown",
+        code: "RESEND_COOLDOWN",
+        message: `Please wait ${retryAfterSeconds}s before requesting another verification email.`,
+        retryAfterSeconds,
+        requestId: res.locals.requestId,
+        details: { retryAfterSeconds },
+      });
+    }
+    acquired = true;
+
+    const user = await getDataSource().getRepository(User).findOne({
+      where: { email, deletedAt: IsNull() },
+    });
+
+    if (user && !user.emailVerifiedAt) {
+      const token = signEmailFlowToken(email, "email_verification");
+      const base =
+        body.verifyUrlBase ?? process.env.EMAIL_VERIFICATION_URL_BASE ?? "https://app.splitnaira.com/verify-email";
+      await getEmailProvider().sendVerificationEmail({
+        to: email,
+        token,
+        verifyUrl: `${base}?token=${encodeURIComponent(token)}`,
+      });
+    }
+
+    return res.status(202).json({
+      success: true,
+      retryAfterSeconds: Math.ceil(verificationResendCooldown.cooldownMs / 1000),
+    });
+  } catch (error) {
+    // A failed lookup or send shouldn't lock the user out for the whole
+    // cooldown; give the slot back so they can retry.
+    if (acquired) verificationResendCooldown.release(email);
+    return next(error);
+  }
+});
+
+/** Marks every account registered with the token's email as verified (#1443). */
+authEmailRouter.post("/email-verification/confirm", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { token } = emailVerificationConfirmSchema.parse(req.body);
+    const payload = verifyEmailFlowToken(token, "email_verification");
+    if (!payload) {
+      return res.status(400).json({ error: "invalid_or_expired_token" });
+    }
+
+    await getDataSource()
+      .getRepository(User)
+      .update({ email: payload.email, emailVerifiedAt: IsNull() }, { emailVerifiedAt: new Date() });
+
     return res.status(200).json({ success: true, email: payload.email });
   } catch (error) {
     return next(error);

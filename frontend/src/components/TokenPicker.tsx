@@ -17,6 +17,8 @@ export interface TokenPickerProps {
   disabled?: boolean;
   required?: boolean;
   error?: string;
+  /** Fixed id for the token select, so an error summary can link to it (#1267). */
+  id?: string;
 }
 
 function shortContract(contractId: string) {
@@ -30,8 +32,10 @@ export function TokenPicker({
   disabled = false,
   required = false,
   error,
+  id,
 }: TokenPickerProps) {
-  const selectId = useId();
+  const generatedSelectId = useId();
+  const selectId = id ?? generatedSelectId;
   const customInputId = useId();
   const errorId = useId();
   const selectRef = useRef<HTMLSelectElement>(null);

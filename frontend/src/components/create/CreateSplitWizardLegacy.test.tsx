@@ -3,6 +3,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+
+// Since #1267 an invalid form keeps its submit button focusable and marks it
+// aria-disabled instead (pressing it reveals the error summary).
 import { useFieldArray, useForm } from "react-hook-form";
 
 import { CreateSplitWizard } from "./CreateSplitWizardLegacy";
@@ -10,6 +13,9 @@ import { findDuplicateCollaboratorAddressIds } from "@/lib/address";
 import type { WalletState } from "@/lib/wallet";
 
 const wallet: WalletState = { connected: false, address: null, network: "testnet" };
+// A checksum-valid G-address; the previous 55-character fixture failed
+// StrKey validation, so the form could never become valid.
+const VALID_ADDRESS_B = "GAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCF6M";
 
 interface CreateCollaboratorInput {
   address: string;
@@ -102,7 +108,7 @@ function InteractiveHarness({
       projectId: "project_alpha",
       title: "Project Alpha",
       projectType: "music",
-      token: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      token: VALID_ADDRESS_B,
       collaborators: [
         {
           address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
@@ -110,7 +116,7 @@ function InteractiveHarness({
           basisPoints: "5000",
         },
         {
-          address: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+          address: VALID_ADDRESS_B,
           alias: "Producer",
           basisPoints: "5000",
         },
@@ -297,7 +303,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
               basisPoints: "4000",
             },
             {
-              address: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+              address: VALID_ADDRESS_B,
               alias: "B",
               basisPoints: "4000",
             },
@@ -308,7 +314,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
 
     expect(screen.getByText("8,000 / 10,000 BP")).toBeInTheDocument();
     expect(screen.getByText(/Under-allocated: 2,000 BP remaining/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /create split project/i })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: /create split project/i })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("displays over-total status and disables submission when shares sum to more than 10,000 BP", () => {
@@ -322,7 +328,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
               basisPoints: "6000",
             },
             {
-              address: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+              address: VALID_ADDRESS_B,
               alias: "B",
               basisPoints: "5500",
             },
@@ -333,7 +339,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
 
     expect(screen.getByText("11,500 / 10,000 BP")).toBeInTheDocument();
     expect(screen.getByText(/Over-allocated: 1,500 BP over limit/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /create split project/i })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: /create split project/i })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("displays valid status and enables submission when shares equal exactly 10,000 BP", async () => {
@@ -351,7 +357,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
               basisPoints: "5000",
             },
             {
-              address: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+              address: VALID_ADDRESS_B,
               alias: "B",
               basisPoints: "5000",
             },
@@ -364,7 +370,8 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
     expect(screen.getByText(/Total shares valid: 100% allocated/i)).toBeInTheDocument();
 
     const submitBtn = screen.getByRole("button", { name: /create split project/i });
-    expect(submitBtn).toHaveProperty("disabled", false);
+    // react-hook-form computes isValid asynchronously after mount.
+    await waitFor(() => expect(submitBtn).toHaveAttribute("aria-disabled", "false"));
 
     await user.click(submitBtn);
     await waitFor(() => {
@@ -385,7 +392,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
               basisPoints: "5000",
             },
             {
-              address: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+              address: VALID_ADDRESS_B,
               alias: "B",
               basisPoints: "5000",
             },
@@ -400,7 +407,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
 
     expect(await screen.findByText(/Share must be a whole integer in basis points/i)).toBeInTheDocument();
     expect(shareInputs[0]).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: /create split project/i })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: /create split project/i })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("dynamically updates allocation matrix and submit readiness when editing share values", async () => {
@@ -418,7 +425,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
               basisPoints: "3000",
             },
             {
-              address: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+              address: VALID_ADDRESS_B,
               alias: "B",
               basisPoints: "3000",
             },
@@ -431,7 +438,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
     expect(screen.getByText("6,000 / 10,000 BP")).toBeInTheDocument();
     expect(screen.getByText(/Under-allocated: 4,000 BP remaining/i)).toBeInTheDocument();
     const submitBtn = screen.getByRole("button", { name: /create split project/i });
-    expect(submitBtn).toHaveProperty("disabled", true);
+    expect(submitBtn).toHaveAttribute("aria-disabled", "true");
 
     // Edit second collaborator to 7000 -> exact total 10,000 BP
     const shareInputs = screen.getAllByPlaceholderText("5000");
@@ -441,7 +448,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
     await waitFor(() => {
       expect(screen.getByText("10,000 / 10,000 BP")).toBeInTheDocument();
       expect(screen.getByText(/Total shares valid: 100% allocated/i)).toBeInTheDocument();
-      expect(submitBtn).toHaveProperty("disabled", false);
+      expect(submitBtn).toHaveAttribute("aria-disabled", "false");
     });
 
     // Edit second collaborator to 8000 -> over total 11,000 BP
@@ -451,7 +458,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
     await waitFor(() => {
       expect(screen.getByText("11,000 / 10,000 BP")).toBeInTheDocument();
       expect(screen.getByText(/Over-allocated: 1,000 BP over limit/i)).toBeInTheDocument();
-      expect(submitBtn).toHaveProperty("disabled", true);
+      expect(submitBtn).toHaveAttribute("aria-disabled", "true");
     });
   });
 
@@ -466,7 +473,7 @@ describe("CreateSplitWizard collaborator percentage totals and validation", () =
               basisPoints: "5000",
             },
             {
-              address: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+              address: VALID_ADDRESS_B,
               alias: "B",
               basisPoints: "5000",
             },

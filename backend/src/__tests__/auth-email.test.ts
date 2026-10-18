@@ -17,6 +17,12 @@ vi.mock("../services/database.js", () => ({
   }),
 }));
 
+vi.mock("../services/session-revocation.js", () => ({
+  getSessionVersion: vi.fn(async () => 0),
+  getMaxSessionVersionForEmail: vi.fn(async () => 0),
+  revokeSessionsForEmail: vi.fn(async () => 1),
+}));
+
 vi.mock("../services/email-provider.js", async () => {
   const actual = await vi.importActual<typeof import("../services/email-provider.js")>("../services/email-provider.js");
   return {

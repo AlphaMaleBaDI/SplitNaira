@@ -3,6 +3,7 @@ import { getEnvDiagnostics } from "../config/env.js";
 import { getDataSource } from "../services/database.js";
 import { checkSorobanReachability } from "../services/stellar.js";
 import { getServiceHealth } from "../services/EventListenerService.js";
+import { deprecationHeaders } from "../middleware/deprecation.js";
 
 export const healthRouter = Router();
 
@@ -44,8 +45,12 @@ export function isShuttingDown(): boolean {
 
 /**
  * Health endpoint - alias for readiness to preserve backward compatibility.
+ *
+ * Issue #1459: this alias is registered in `API_DEPRECATIONS` and advertises
+ * RFC 9745 / RFC 8594 `Deprecation`/`Sunset` headers so clients can move to
+ * `/health/ready` before the alias is removed.
  */
-healthRouter.get("/", async (_req, res, next) => {
+healthRouter.get("/", deprecationHeaders("health-alias"), async (_req, res, next) => {
   await handleReadiness(_req, res, next);
 });
 

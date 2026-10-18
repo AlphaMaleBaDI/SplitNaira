@@ -1,6 +1,14 @@
 "use client";
 
-import { Controller, type Control, type UseFormRegister, type FieldErrors, type FieldArrayWithId } from "react-hook-form";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import {
+  Controller,
+  type Control,
+  type UseFormRegister,
+  type UseFormHandleSubmit,
+  type FieldErrors,
+  type FieldArrayWithId,
+} from "react-hook-form";
 import { clsx } from "clsx";
 import { StrKey } from "@stellar/stellar-sdk";
 import { useTranslations } from "next-intl";
@@ -8,6 +16,7 @@ import type { SplitProject } from "@/lib/stellar";
 import type { WalletState } from "@/lib/wallet";
 import { TokenSelector } from "../TypeSelector";
 import { TransactionReceiptView, type TransactionReceipt } from "../TransactionReceiptView";
+import { FormErrorSummary, type FormErrorSummaryItem } from "../FormErrorSummary";
 
 interface CreateCollaboratorInput {
   address: string;
@@ -28,7 +37,7 @@ interface CreateSplitWizardProps {
   wallet: WalletState;
   control: Control<CreateSplitFormValues>;
   register: UseFormRegister<CreateSplitFormValues>;
-  handleSubmit: (callback: (data: CreateSplitFormValues) => void) => (e?: React.BaseSyntheticEvent) => Promise<void>;
+  handleSubmit: UseFormHandleSubmit<CreateSplitFormValues>;
   onSubmit: (data: CreateSplitFormValues) => void;
   createFormErrors: FieldErrors<CreateSplitFormValues>;
   collaboratorFields: FieldArrayWithId<CreateSplitFormValues, "collaborators", "id">[];
@@ -47,6 +56,16 @@ interface CreateSplitWizardProps {
   setActiveTab: (tab: "dashboard" | "create" | "manage" | "projects") => void;
   setSearchProjectId: (val: string) => void;
   setFetchedProject: (p: SplitProject | null) => void;
+}
+
+function isEmptyOrFuture(value?: string): boolean {
+  return !value || new Date(value).getTime() > Date.now();
+}
+
+/** Joins the ids of whichever descriptions currently apply, for `aria-describedby`. */
+function describedBy(...ids: Array<string | false | null | undefined>): string | undefined {
+  const present = ids.filter(Boolean);
+  return present.length ? present.join(" ") : undefined;
 }
 
 export function CreateSplitWizard({
@@ -78,12 +97,77 @@ export function CreateSplitWizard({
     createRetryError && /project id .*already exists/i.test(createRetryError),
   );
 
+  // Accessible error summary (#1267): revealed by a failed submit attempt,
+  // never while the user is typing.
+  const [hasAttemptedSubmit, setHasAttemptedSubmit] = useState(false);
+  const [focusRequest, setFocusRequest] = useState(0);
+  const summaryRef = useRef<HTMLDivElement>(null);
+
+  const isTotalInvalid = totalBasisPoints !== 10_000;
+  const totalMessage =
+    totalBasisPoints < 10_000
+      ? t("underAllocated", { remaining: (10_000 - totalBasisPoints).toLocaleString() })
+      : t("overAllocated", { over: (totalBasisPoints - 10_000).toLocaleString() });
+
+  const summaryErrors: FormErrorSummaryItem[] = [];
+  const pushError = (fieldId: string, message?: string) => {
+    if (message) summaryErrors.push({ fieldId, message });
+  };
+  pushError("projectId", createFormErrors.projectId?.message);
+  pushError("title", createFormErrors.title?.message);
+  pushError("token", createFormErrors.token?.message);
+  pushError("projectType", createFormErrors.projectType?.message);
+  pushError("expiresAt", createFormErrors.expiresAt?.message);
+  collaboratorFields.forEach((field, index) => {
+    const rowErrors = createFormErrors.collaborators?.[index];
+    pushError(`address-${field.id}`, rowErrors?.address?.message ?? collaboratorValidationErrors[field.id]);
+    pushError(`alias-${field.id}`, rowErrors?.alias?.message);
+    pushError(`bp-${field.id}`, rowErrors?.basisPoints?.message);
+  });
+  if (isTotalInvalid && collaboratorFields[0]) {
+    pushError(`bp-${collaboratorFields[0].id}`, totalMessage);
+  }
+
+  // Reads the latest errors without making the effect re-run on every
+  // change: focus should only move when there's a new submit attempt.
+  const focusFirstError = useEffectEvent(() => {
+    if (summaryErrors.length > 1) {
+      summaryRef.current?.focus();
+    } else if (summaryErrors.length === 1) {
+      document.getElementById(summaryErrors[0].fieldId)?.focus();
+    }
+  });
+
+  useEffect(() => {
+    if (focusRequest > 0) focusFirstError();
+  }, [focusRequest]);
+
+  const revealErrors = () => {
+    setHasAttemptedSubmit(true);
+    setFocusRequest((n) => n + 1);
+  };
+
+  const submitForm = handleSubmit((data) => {
+    if (sorobanSplitFlowBusy) return;
+    // Field rules passed, but form-level checks (share total, duplicate
+    // addresses) can still fail.
+    if (!isValid) {
+      revealErrors();
+      return;
+    }
+    onSubmit(data);
+  }, revealErrors);
+
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="glass-card rounded-[2.5rem] p-8 md:p-10 space-y-12">
+    <form onSubmit={submitForm} noValidate className="glass-card rounded-[2.5rem] p-8 md:p-10 space-y-12">
       <div className="flex items-center justify-between border-b border-white/5 pb-6">
         <h2 className="font-display text-2xl tracking-tight">Project Setup</h2>
         <span className="text-[10px] font-bold uppercase text-muted">Step 01 / 02</span>
       </div>
+
+      {hasAttemptedSubmit && summaryErrors.length > 1 && (
+        <FormErrorSummary ref={summaryRef} errors={summaryErrors} />
+      )}
 
       <div className="mt-8 grid gap-6 md:grid-cols-2">
         <div className="space-y-2">
@@ -97,10 +181,12 @@ export function CreateSplitWizard({
             id="projectId"
             placeholder="e.g. dawn_of_nova_01"
             className="glass-input w-full rounded-2xl px-5 py-4 text-sm"
+            aria-invalid={Boolean(createFormErrors.projectId)}
+            aria-describedby={describedBy(createFormErrors.projectId && "projectId-error")}
             {...register("projectId", { required: t("projectIdRequired") })}
           />
           {createFormErrors.projectId && (
-            <p className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
+            <p id="projectId-error" className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
               {createFormErrors.projectId.message}
             </p>
           )}
@@ -116,10 +202,12 @@ export function CreateSplitWizard({
             id="title"
             placeholder="e.g. Dawn of Nova"
             className="glass-input w-full rounded-2xl px-5 py-4 text-sm"
+            aria-invalid={Boolean(createFormErrors.title)}
+            aria-describedby={describedBy(createFormErrors.title && "title-error")}
             {...register("title", { required: t("titleRequired") })}
           />
           {createFormErrors.title && (
-            <p className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
+            <p id="title-error" className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
               {createFormErrors.title.message}
             </p>
           )}
@@ -136,18 +224,15 @@ export function CreateSplitWizard({
           }}
           render={({ field }) => (
             <TokenSelector
+              id="token"
               value={field.value}
               onChange={field.onChange}
               network={wallet.network ?? null}
               required
+              error={createFormErrors.token?.message}
             />
           )}
         />
-        {createFormErrors.token && (
-          <p className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter md:col-span-2 -mt-4">
-            {createFormErrors.token.message}
-          </p>
-        )}
         <div className="space-y-2">
           <label
             htmlFor="projectType"
@@ -159,10 +244,12 @@ export function CreateSplitWizard({
             id="projectType"
             placeholder="e.g. Music, Film"
             className="glass-input w-full rounded-2xl px-5 py-4 text-sm"
+            aria-invalid={Boolean(createFormErrors.projectType)}
+            aria-describedby={describedBy(createFormErrors.projectType && "projectType-error")}
             {...register("projectType", { required: t("projectTypeRequired") })}
           />
           {createFormErrors.projectType && (
-            <p className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
+            <p id="projectType-error" className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
               {createFormErrors.projectType.message}
             </p>
           )}
@@ -178,13 +265,14 @@ export function CreateSplitWizard({
             id="expiresAt"
             type="datetime-local"
             className="glass-input w-full rounded-2xl px-5 py-4 text-sm"
+            aria-invalid={Boolean(createFormErrors.expiresAt)}
+            aria-describedby={describedBy(createFormErrors.expiresAt && "expiresAt-error")}
             {...register("expiresAt", {
-              validate: (value) =>
-                !value || new Date(value).getTime() > Date.now() || "Expiration must be in the future",
+              validate: (value) => isEmptyOrFuture(value) || "Expiration must be in the future",
             })}
           />
           {createFormErrors.expiresAt && (
-            <p className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
+            <p id="expiresAt-error" className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
               {createFormErrors.expiresAt.message}
             </p>
           )}
@@ -234,6 +322,8 @@ export function CreateSplitWizard({
                       "glass-input w-full rounded-xl px-4 py-3 text-sm",
                       addressError ? "border-red-500/50 bg-red-500/5" : "",
                     )}
+                    aria-invalid={Boolean(addressError)}
+                    aria-describedby={describedBy(addressError && `address-error-${field.id}`)}
                     {...register(`collaborators.${index}.address`, {
                       required: t("addressRequired"),
                       validate: (value) =>
@@ -243,7 +333,7 @@ export function CreateSplitWizard({
                     })}
                   />
                   {addressError && (
-                    <p className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
+                    <p id={`address-error-${field.id}`} className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
                       {addressError}
                     </p>
                   )}
@@ -262,12 +352,14 @@ export function CreateSplitWizard({
                       "glass-input w-full rounded-xl px-4 py-3 text-sm",
                       aliasError ? "border-red-500/50 bg-red-500/5" : "",
                     )}
+                    aria-invalid={Boolean(aliasError)}
+                    aria-describedby={describedBy(aliasError && `alias-error-${field.id}`)}
                     {...register(`collaborators.${index}.alias`, {
                       required: t("aliasRequired"),
                     })}
                   />
                   {aliasError && (
-                    <p className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
+                    <p id={`alias-error-${field.id}`} className="px-1 text-[10px] font-bold text-red-400 uppercase tracking-tighter">
                       {aliasError}
                     </p>
                   )}
@@ -285,8 +377,11 @@ export function CreateSplitWizard({
                     min={0}
                     max={10_000}
                     placeholder="5000"
-                    aria-invalid={Boolean(basisPointsError)}
-                    aria-describedby={basisPointsError ? `bp-error-${field.id}` : undefined}
+                    aria-invalid={Boolean(basisPointsError) || (hasAttemptedSubmit && isTotalInvalid)}
+                    aria-describedby={describedBy(
+                      basisPointsError && `bp-error-${field.id}`,
+                      isTotalInvalid && "allocation-status",
+                    )}
                     className={clsx(
                       "glass-input w-full rounded-xl px-4 py-3 text-sm",
                       basisPointsError ? "border-red-500/50 bg-red-500/5" : "",
@@ -331,6 +426,7 @@ export function CreateSplitWizard({
             <div className="space-y-1">
               <span className="text-[10px] uppercase font-bold tracking-[0.2em] text-muted">Allocation Matrix</span>
               <p
+                id="allocation-status"
                 role="status"
                 aria-live="polite"
                 className={clsx(
@@ -384,10 +480,19 @@ export function CreateSplitWizard({
             )}
           </div>
         )}
+        {/*
+          Not `disabled` while the form is merely invalid: a disabled button
+          is skipped by Tab and gives no feedback, so keyboard and screen
+          reader users couldn't find out what's wrong. It's `aria-disabled`
+          instead, and pressing it reveals the error summary (#1267). It is
+          truly disabled while a submission is in flight (#1266).
+        */}
         <button
           type="submit"
-          disabled={!isValid || sorobanSplitFlowBusy}
-          className="premium-button w-full rounded-4xl bg-greenMid py-5 text-sm font-extrabold uppercase tracking-[0.25em] text-white shadow-2xl shadow-greenMid/20 disabled:cursor-not-allowed disabled:opacity-20"
+          disabled={sorobanSplitFlowBusy}
+          aria-disabled={!isValid || sorobanSplitFlowBusy}
+          aria-busy={isSubmitting || undefined}
+          className="premium-button w-full rounded-4xl bg-greenMid py-5 text-sm font-extrabold uppercase tracking-[0.25em] text-white shadow-2xl shadow-greenMid/20 disabled:cursor-not-allowed disabled:opacity-20 aria-disabled:cursor-not-allowed aria-disabled:opacity-20"
         >
           {isSubmitting ? (
             <div className="flex items-center justify-center gap-3">

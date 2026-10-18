@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken } from "../services/jwt.js";
+import { getSessionVersion } from "../services/session-revocation.js";
 
 export interface AuthenticatedUser {
   walletAddress: string;
@@ -22,7 +23,7 @@ const BEARER_PREFIX = "bearer ";
 // SplitNaira authenticates Stellar account/contract addresses in JWTs.
 const STELLAR_ADDRESS_REGEX = /^[GC][A-Z2-7]{55}$/;
 
-export function authJwtMiddleware(req: Request, res: Response, next: NextFunction) {
+export async function authJwtMiddleware(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
 
   // Authorization scheme names are case-insensitive per RFC 7235, so
@@ -56,6 +57,21 @@ export function authJwtMiddleware(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: "unauthorized", code: "UNAUTHORIZED", message: "Token expired or invalid.", requestId, details: {} });
   }
 
+  // Session revocation (#1446): a token is only valid while its `sv` claim
+  // matches the user's current sessionVersion. Tokens issued before `sv`
+  // existed count as version 0. A lookup failure goes to the error handler
+  // (fail closed) rather than letting the request through unchecked.
+  let currentVersion: number | null;
+  try {
+    currentVersion = await getSessionVersion(payload.walletAddress);
+  } catch (error) {
+    return next(error);
+  }
+  const tokenVersion = typeof payload.sv === "number" ? payload.sv : 0;
+  if (currentVersion !== null && tokenVersion !== currentVersion) {
+    return res.status(401).json({ error: "unauthorized", code: "SESSION_REVOKED", message: "Session has been revoked. Please log in again.", requestId, details: {} });
+  }
+
   req.user = { walletAddress: payload.walletAddress };
   next();
 }
@@ -65,7 +81,7 @@ export function authJwtMiddleware(req: Request, res: Response, next: NextFunctio
 // that verifies successfully but is missing (or has a malformed)
 // walletAddress claim would otherwise flow straight through as a valid
 // authenticated user.
-function isAuthenticatedUser(payload: unknown): payload is AuthenticatedUser {
+function isAuthenticatedUser(payload: unknown): payload is AuthenticatedUser & { sv?: unknown } {
   if (typeof payload !== "object" || payload === null) {
     return false;
   }

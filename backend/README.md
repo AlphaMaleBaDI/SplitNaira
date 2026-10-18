@@ -46,6 +46,26 @@ The API documentation is defined using Zod schemas and generated into an OpenAPI
 - Output: `openapi/openapi.yaml`
 - Command: `npm run generate:openapi`
 
+## API surface contracts
+
+Cross-cutting contracts enforced by tests. See
+[`../docs/api-surface-contracts.md`](../docs/api-surface-contracts.md).
+
+- **Unknown-route 404** — any unmatched request returns a static,
+  machine-readable body (`error: "not_found"`, `code: "NOT_FOUND"`); it never
+  echoes the request path/method or leaks a stack trace.
+- **Deprecation / Sunset headers** — endpoints scheduled for removal advertise
+  `Deprecation`, `Sunset` and `Link: <...>; rel="deprecation"`. Add entries to
+  `API_DEPRECATIONS` in `src/middleware/deprecation.ts` and apply
+  `deprecationHeaders("<key>")` to the route.
+- **Per-route rate-limit policies** — named policies for `global`, `auth`,
+  `admin`, `read`, `write` and `sse` traffic live in `RATE_LIMIT_POLICIES`
+  (`src/middleware/rate-limit.ts`) and are documented in
+  [`../docs/rate-limiting-guidance.md`](../docs/rate-limiting-guidance.md).
+- **API contract tests** — `src/__tests__/api-contract.test.ts` runs the real
+  app against the generated OpenAPI document and fails on undocumented response
+  fields or lost contracts.
+
 ## Read caching
 
 The shared in-process read cache is limited to public Soroban contract reads: paginated project lists and project details (including their on-chain balance). Entries live for 30 seconds by default; `READ_CACHE_TTL_MS` and `READ_CACHE_MAX_ENTRIES` configure the TTL and bounded capacity. Cache keys are resource-based, never user-based, because these endpoints contain shared on-chain state and no caller-specific fields. Do not add authenticated account data, permissions, or personalized results to this cache; those require user-scoped keys or must remain uncached.
