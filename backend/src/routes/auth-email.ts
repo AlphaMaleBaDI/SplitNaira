@@ -18,6 +18,13 @@ import { IsNull } from "typeorm";
 import { getMaxSessionVersionForEmail, revokeSessionsForEmail } from "../services/session-revocation.js";
 import { verificationResendCooldown } from "../services/verification-resend-cooldown.js";
 import { logAuthEvent } from "../services/auth-events.js";
+import {
+  consumeEmailVerificationToken,
+  hashEmailVerificationToken,
+  invalidateEmailVerificationToken,
+  issueEmailVerificationToken,
+  rotateEmailVerificationToken,
+} from "../services/email-verification-token.js";
 
 export const authEmailRouter = Router();
 
@@ -163,14 +170,26 @@ authEmailRouter.post("/email-verification/resend", async (req: Request, res: Res
     });
 
     if (user && !user.emailVerifiedAt) {
-      const token = signEmailFlowToken(email, "email_verification");
+      // Issue first, then make it the only live token for this address
+      // (#1444). A previous link stops working the moment the upsert commits,
+      // even if this request's email never arrives.
+      const issued = issueEmailVerificationToken(email);
+      await rotateEmailVerificationToken(email, issued);
+
       const base =
         body.verifyUrlBase ?? process.env.EMAIL_VERIFICATION_URL_BASE ?? "https://app.splitnaira.com/verify-email";
-      await getEmailProvider().sendVerificationEmail({
-        to: email,
-        token,
-        verifyUrl: `${base}?token=${encodeURIComponent(token)}`,
-      });
+      try {
+        await getEmailProvider().sendVerificationEmail({
+          to: email,
+          token: issued.token,
+          verifyUrl: `${base}?token=${encodeURIComponent(issued.token)}`,
+        });
+      } catch (error) {
+        // Leave no live token behind that nobody received. Best-effort: the
+        // original send error is the one the caller needs to see.
+        await invalidateEmailVerificationToken(email, issued.tokenHash).catch(() => undefined);
+        throw error;
+      }
     }
 
     logAuthEvent(res, "email_verification_resent", "success", { userId: user?.id, email });
@@ -186,7 +205,15 @@ authEmailRouter.post("/email-verification/resend", async (req: Request, res: Res
   }
 });
 
-/** Marks every account registered with the token's email as verified (#1443). */
+/**
+ * Marks every account registered with the token's email as verified (#1443).
+ *
+ * The token is consumed before the account is marked verified (#1444): the
+ * conditional update is what makes a replay, a superseded link, and one of two
+ * concurrent confirms fail closed. A confirmation always applies to the email
+ * inside the signed token, never to a value from the request body, so a token
+ * issued for one address cannot verify another.
+ */
 authEmailRouter.post("/email-verification/confirm", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { token } = emailVerificationConfirmSchema.parse(req.body);
@@ -194,6 +221,15 @@ authEmailRouter.post("/email-verification/confirm", async (req: Request, res: Re
     if (!payload) {
       logAuthEvent(res, "email_verified", "failure", { reason: "invalid_or_expired_token" });
       return res.status(400).json({ error: "invalid_or_expired_token", requestId: res.locals.requestId });
+    }
+
+    const consumed = await consumeEmailVerificationToken(
+      payload.email,
+      hashEmailVerificationToken(token),
+    );
+    if (!consumed) {
+      // Reused, superseded, expired, or never issued.
+      return res.status(400).json({ error: "invalid_or_expired_token" });
     }
 
     await getDataSource()

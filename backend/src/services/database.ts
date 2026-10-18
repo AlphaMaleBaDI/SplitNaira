@@ -6,6 +6,7 @@ import { TransactionRecord } from "../entities/Transaction.js";
 import { ServiceState } from "../entities/ServiceState.js";
 import { AuditLog } from "../entities/AuditLog.js";
 import { LedgerBlock } from "../entities/LedgerBlock.js";
+import { EmailVerificationToken } from "../entities/EmailVerificationToken.js";
 import { SplitCancellation } from "../entities/SplitCancellation.js";
 import { ProjectArchival } from "../entities/ProjectArchival.js";
 import { NotificationPreference } from "../entities/NotificationPreference.js";
@@ -49,8 +50,9 @@ export function createDataSource(): DataSource {
       SplitCancellation,
       ProjectArchival,
       NotificationPreference,
-    Notification,
-    ProjectEditHistory
+      Notification,
+      ProjectEditHistory,
+      EmailVerificationToken,
     ],
     migrations: ["src/migrations/*.ts"],
     migrationsTableName: "migrations",

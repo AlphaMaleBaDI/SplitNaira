@@ -245,7 +245,13 @@ describe("admin write-disable switch: real middleware chain (Issue #940)", () =>
   // ---- Acceptance criterion: "Allow safe read-only admin routes" ----
   it("allows GET /splits/admin/status through even when writes are disabled", async () => {
     setWritesEnabled("false");
-    simulateTransactionMock.mockResolvedValue({ result: { retval: "GADMIN" } });
+    // Each contract read gets a value of its own type (#1494 rejects a
+    // non-boolean pause flag). Reset first so values queued by earlier tests
+    // can't leak in.
+    simulateTransactionMock.mockReset();
+    simulateTransactionMock.mockImplementation(async (tx: { preparedOperation: { method: string } }) => ({
+      result: { retval: tx.preparedOperation.method === "is_distributions_paused" ? false : "GADMIN" },
+    }));
     getAccountMock.mockResolvedValue({ accountId: "GTESTSIMULATOR" });
 
     const app = buildApp();

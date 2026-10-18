@@ -34,12 +34,14 @@ export interface EmailProvider {
     to: string;
     token: string;
     resetUrl: string;
+    locale?: string;
   }): Promise<void>;
   sendInvitationEmail(input: {
     to: string;
     token: string;
     inviteUrl: string;
     inviterWalletAddress?: string;
+    locale?: string;
   }): Promise<void>;
   sendVerificationEmail(input: {
     to: string;
@@ -64,11 +66,27 @@ export interface EmailProvider {
   }): Promise<void>;
 }
 
+export const LOCALIZED_EMAIL_SUBJECTS: Record<string, { reset: string; invite: string }> = {
+  en: { reset: "Reset your SplitNaira password", invite: "You've been invited to collaborate on SplitNaira" },
+  fr: { reset: "Réinitialiser votre mot de passe SplitNaira", invite: "Vous avez été invité à collaborer sur SplitNaira" },
+  es: { reset: "Restablecer su contraseña de SplitNaira", invite: "Has sido invitado a colaborar en SplitNaira" },
+  ha: { reset: "Sake saita kalmar sirri ta SplitNaira", invite: "An gayyace ku don haɗin gwiwa akan SplitNaira" },
+  yo: { reset: "Atunse ọrọ igbaniwọle SplitNaira rẹ", invite: "A ti pè ọ lati ṣiṣẹ pọ lori SplitNaira" },
+  ig: { reset: "Tọgharia okwu mbanye SplitNaira gị", invite: "A kpọọla gị ka gị na SplitNaira rụkọọ ọrụ" },
+};
+
+export function getLocalizedSubjects(locale: string = "en") {
+  return LOCALIZED_EMAIL_SUBJECTS[locale] || LOCALIZED_EMAIL_SUBJECTS["en"]!;
+}
+
 class ConsoleEmailProvider implements EmailProvider {
-  async sendPasswordResetEmail(input: { to: string; token: string; resetUrl: string }): Promise<void> {
+  async sendPasswordResetEmail(input: { to: string; token: string; resetUrl: string; locale?: string }): Promise<void> {
+    const subjects = getLocalizedSubjects(input.locale);
     logger.info("Password reset email queued", {
       to: input.to,
-      resetUrl: redactUrlForLog(input.resetUrl),
+      resetUrl: input.resetUrl,
+      subject: subjects.reset,
+      locale: input.locale || "en",
       tokenHash: crypto.createHash("sha256").update(input.token).digest("hex"),
     });
   }
@@ -78,10 +96,14 @@ class ConsoleEmailProvider implements EmailProvider {
     token: string;
     inviteUrl: string;
     inviterWalletAddress?: string;
+    locale?: string;
   }): Promise<void> {
+    const subjects = getLocalizedSubjects(input.locale);
     logger.info("Invitation email queued", {
       to: input.to,
-      inviteUrl: redactUrlForLog(input.inviteUrl),
+      inviteUrl: input.inviteUrl,
+      subject: subjects.invite,
+      locale: input.locale || "en",
       inviterWalletAddress: input.inviterWalletAddress,
       tokenHash: crypto.createHash("sha256").update(input.token).digest("hex"),
     });
@@ -135,13 +157,11 @@ export interface EmailFlowTokenClaims {
    */
   sv?: number;
   /**
-   * Email change (#1448): the account the change is for and the address it had
-   * when the change was requested (`""` when it had none). Confirming checks
-   * both against the account, which makes the link single-use: once the address
-   * changes, the same link no longer matches.
+   * Unique token id (#1444). Present on email verification tokens so each
+   * issued link is distinguishable even when two links are created in the
+   * same second.
    */
-  uid?: string;
-  prev?: string;
+  jti?: string;
 }
 
 export function signEmailFlowToken(
@@ -163,17 +183,17 @@ export function verifyEmailFlowToken(
       email?: string;
       purpose?: string;
       sv?: unknown;
-      uid?: unknown;
-      prev?: unknown;
+      jti?: unknown;
     };
     if (payload.purpose !== expectedPurpose || !payload.email) {
       return null;
     }
-    const claims: { email: string } & EmailFlowTokenClaims = { email: payload.email };
-    if (typeof payload.sv === "number") claims.sv = payload.sv;
-    if (typeof payload.uid === "string") claims.uid = payload.uid;
-    if (typeof payload.prev === "string") claims.prev = payload.prev;
-    return claims;
+
+    return {
+      email: payload.email,
+      ...(typeof payload.sv === "number" ? { sv: payload.sv } : {}),
+      ...(typeof payload.jti === "string" ? { jti: payload.jti } : {}),
+    };
   } catch {
     return null;
   }

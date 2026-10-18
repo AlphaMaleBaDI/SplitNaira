@@ -182,7 +182,9 @@ const ADMIN_READ_CONTRACTS: AdminReadContract[] = [
     schema: AdminTokenCountResponseSchema,
     contractReturns: { get_allowed_token_count: 7 },
     expectedBody: { count: 7 },
-    drift: { get_allowed_token_count: "seven" },
+    // No `drift`: since #1494 a non-u32 count is rejected when it is read
+    // from the RPC response, so it can't reach the response schema (see the
+    // "malformed contract values" test below).
   },
   {
     path: "/splits/admin/unallocated",
@@ -368,6 +370,30 @@ describe("Issue #1088: split admin read endpoint response contracts", () => {
         expect(res.body.error).toBe("validation_error");
         expectErrorEnvelope(res.body);
         expect(simulateTransactionMock).not.toHaveBeenCalled();
+        expect(getValidationFailureCount()).toBe(0);
+      });
+    }
+  });
+
+  describe("Issue #1494: malformed contract values are rejected at the RPC boundary", () => {
+    const MALFORMED: Array<{ url: string; returns: ContractReturns }> = [
+      { url: "/splits/admin/token-count", returns: { get_allowed_token_count: "seven" } },
+      { url: "/splits/admin/status", returns: { get_admin: ADMIN, is_distributions_paused: "true" } },
+      { url: `/splits/admin/is-token-allowed?token=${TOKEN}`, returns: { is_token_allowed: 1 } },
+      { url: `/splits/admin/unallocated?token=${TOKEN}`, returns: { get_unallocated_balance: -5 } },
+      { url: `/splits/admin/unallocated?token=${TOKEN}`, returns: { get_unallocated_balance: 1.5 } },
+    ];
+
+    for (const { url, returns } of MALFORMED) {
+      it(`GET ${url} returns 502 RPC_RESPONSE_INVALID for ${JSON.stringify(returns)}`, async () => {
+        mockContract(returns);
+
+        const res = await request(createTestApp()).get(url);
+
+        expect(res.status).toBe(502);
+        expect(res.body.code).toBe("RPC_RESPONSE_INVALID");
+        expectErrorEnvelope(res.body);
+        // Rejected before a response body exists, so it is not outbound drift.
         expect(getValidationFailureCount()).toBe(0);
       });
     }

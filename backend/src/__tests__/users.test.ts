@@ -243,7 +243,7 @@ describe("User Registration API", () => {
       expect(response.body.alias).toBe("LoginUser");
     });
 
-    it("should return 404 for non-existent user", async () => {
+    it("should return a generic 401 for non-existent user", async () => {
       findOneMock.mockResolvedValue(null);
       const app = createApp();
 
@@ -251,7 +251,7 @@ describe("User Registration API", () => {
         .post("/users/login")
         .send({ walletAddress: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF" });
 
-      expect(response.status).toBe(404);
+      expect(response.status).toBe(401);
     });
 
     it("should reject invalid wallet address format", async () => {
@@ -497,7 +497,7 @@ describe("Soft delete (#1333)", () => {
   describe("lookups exclude soft-deleted accounts", () => {
     const walletAddress = "GCNSJNUEJLYRS7FXIWVDUABVBP5PQHCWW6M7IQIBA66C5LCY2RAZ5LBI";
 
-    it("POST /users/login 404s for a soft-deleted wallet", async () => {
+    it("POST /users/login returns a generic 401 for a soft-deleted wallet", async () => {
       // The route filters by deletedAt: IsNull(); a soft-deleted user is
       // therefore never returned to it, which this simulates directly.
       findOneMock.mockResolvedValue(null);
@@ -506,7 +506,7 @@ describe("Soft delete (#1333)", () => {
       await request(app)
         .post("/users/login")
         .send({ walletAddress })
-        .expect(404);
+        .expect(401);
     });
 
     it("GET /users/:walletAddress 404s for a soft-deleted wallet", async () => {

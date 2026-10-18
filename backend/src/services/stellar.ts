@@ -17,6 +17,7 @@ import {
   recordRpcRetryOutcome
 } from "./metrics.js";
 import { DEFAULT_RPC_MAX_RETRIES, boundRetryBudget } from "./rpc-retry-budget.js";
+import { installRpcResponseValidation } from "./rpc-response-validation.js";
 
 export { RPC_RETRY_BUDGET_MAX_RETRIES, boundRetryBudget } from "./rpc-retry-budget.js";
 
@@ -309,6 +310,8 @@ export function getStellarRpcServer(): rpc.Server {
 
   const config = loadStellarConfig();
   cachedRpcServer = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
+  // Issue #1494: validate every JSON-RPC response before the SDK parses it.
+  installRpcResponseValidation(cachedRpcServer);
   return cachedRpcServer;
 }
 

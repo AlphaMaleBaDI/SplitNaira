@@ -8,6 +8,7 @@ Quick triage guide for `simulateTransaction` failures against the Soroban RPC.
 - `UnknownError` / `HostError: Storage` — account or contract data missing on the target network (wrong network passphrase or unfunded account).
 - `txMalformed` / `txSorobanInvalid` — footprint or resource fee mismatch; usually a stale simulation before signing.
 - Timeout / connection reset — RPC node under load or wrong `SOROBAN_RPC_URL` for the environment.
+- `RPC_RESPONSE_INVALID` (HTTP 502) — the RPC answered, but the response failed schema validation. The `Stellar RPC response failed validation` log line names the method and failing fields. See [Stellar RPC Response Validation](./stellar-rpc-response-validation.md).
 
 ## Reproducing
 
