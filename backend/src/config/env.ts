@@ -59,6 +59,9 @@ const backendEnvSchema = z.object({
     .min(1, "SOROBAN_RPC_URL must not be empty")
     .url("SOROBAN_RPC_URL must be a valid URL, e.g. https://soroban-testnet.stellar.org"),
 
+  // Optional comma-separated fallback endpoints. Parsed and URL-validated by the RPC health policy.
+  SOROBAN_RPC_BACKUP_URLS: z.string().optional().default(""),
+
   SOROBAN_NETWORK_PASSPHRASE: z
     .string()
     .min(1, "SOROBAN_NETWORK_PASSPHRASE must not be empty"),
@@ -228,6 +231,7 @@ export function printEnvDiagnostics(): void {
     { key: "DATABASE_URL", required: true },
     { key: "HORIZON_URL", required: true },
     { key: "SOROBAN_RPC_URL", required: true },
+    { key: "SOROBAN_RPC_BACKUP_URLS", required: false },
     { key: "SOROBAN_NETWORK_PASSPHRASE", required: true },
     { key: "CONTRACT_ID", required: true },
     { key: "SIMULATOR_ACCOUNT", required: true },
