@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { performance } from "node:perf_hooks";
 import { Client } from "pg";
 
 const scriptFile = fileURLToPath(import.meta.url);
@@ -80,6 +81,108 @@ export function resolveMigrationConfig(environment = process.env) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Timing helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `spawnSync` for a migration step and return the wall-clock duration in
+ * milliseconds together with the exit status.
+ *
+ * @param {string} label   Human-readable step name for the timing report.
+ * @param {Function} fn    Synchronous function to time. Must throw or return a
+ *                         value that indicates failure via a `.status` property.
+ * @returns {{ label: string, ms: number }}
+ */
+export function measureMigrationTiming(label, fn) {
+  const start = performance.now();
+  fn();
+  const ms = performance.now() - start;
+  return { label, ms };
+}
+
+/**
+ * Open a short-lived connection to `databaseUrl`, acquire a PostgreSQL
+ * session-level advisory lock, and report whether the lock was available.
+ *
+ * Uses `pg_try_advisory_lock` (non-blocking) so it always returns quickly.
+ * If a concurrent migration runner holds the same lock the function returns
+ * `{ held: false, ms }` without waiting.
+ *
+ * The caller is responsible for releasing the lock if `held === true`.
+ *
+ * @param {string} databaseUrl
+ * @param {bigint} [lockKey=1_000_000_007n]  Arbitrary 64-bit key.
+ * @returns {Promise<{ held: boolean, ms: number }>}
+ */
+export async function checkAdvisoryLock(databaseUrl, lockKey = 1_000_000_007n) {
+  const client = new Client({ connectionString: databaseUrl });
+  await client.connect();
+  const start = performance.now();
+  try {
+    const result = await client.query(
+      "SELECT pg_try_advisory_lock($1) AS held",
+      [lockKey],
+    );
+    const ms = performance.now() - start;
+    const held = result.rows[0]?.held === true;
+    if (held) {
+      await client.query("SELECT pg_advisory_unlock($1)", [lockKey]);
+    }
+    return { held, ms };
+  } finally {
+    await client.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Migration execution with per-step timing
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the TypeORM migration:run command and emit structured timing output.
+ *
+ * When `MIGRATION_TIMING` is set to `"1"` or `"true"` in the environment the
+ * function emits a JSON timing report on stdout after migrations complete.
+ *
+ * @param {{ timingEnabled?: boolean }} [opts]
+ * @returns {{ ms: number }}  Wall-clock time of the full migration run.
+ */
+export function runMigrationsWithTiming(opts = {}) {
+  const timingEnabled =
+    opts.timingEnabled ??
+    ["1", "true"].includes((process.env.MIGRATION_TIMING ?? "").toLowerCase());
+
+  const { ms } = measureMigrationTiming("migration:run", () => {
+    const result = spawnSync(
+      process.platform === "win32" ? "npm.cmd" : "npm",
+      ["run", "typeorm", "--", "migration:run", "-d", "src/data-source.ts"],
+      {
+        cwd: backendRoot,
+        stdio: "inherit",
+        env: process.env,
+      },
+    );
+    if (result.status !== 0) {
+      process.exit(result.status ?? 1);
+    }
+  });
+
+  if (timingEnabled) {
+    const report = {
+      event: "migration_timing",
+      step: "migration:run",
+      durationMs: Math.round(ms),
+      timestamp: new Date().toISOString(),
+    };
+    // Write to stdout on its own line so CI can capture it independently of
+    // the TypeORM output that goes to inherited stdio above.
+    process.stdout.write("\n" + JSON.stringify(report) + "\n");
+  }
+
+  return { ms };
+}
+
 async function resetDatabase({ adminConnectionString, databaseName }) {
   console.log(`[migration:dry-run] Resetting database ${databaseName} for a fresh migration run`);
 
@@ -91,22 +194,6 @@ async function resetDatabase({ adminConnectionString, databaseName }) {
     await client.query(`CREATE DATABASE "${databaseName}"`);
   } finally {
     await client.end();
-  }
-}
-
-function runMigrations() {
-  const result = spawnSync(
-    process.platform === "win32" ? "npm.cmd" : "npm",
-    ["run", "typeorm", "--", "migration:run", "-d", "src/data-source.ts"],
-    {
-      cwd: backendRoot,
-      stdio: "inherit",
-      env: process.env,
-    },
-  );
-
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
   }
 }
 
@@ -128,8 +215,10 @@ export async function main() {
 
   console.log("[migration:dry-run] Starting TypeORM migration verification against a fresh database");
   await resetDatabase(config);
-  runMigrations();
-  console.log("[migration:dry-run] Completed successfully.");
+  const { ms } = runMigrationsWithTiming();
+  console.log(
+    `[migration:dry-run] Completed successfully. (migration:run took ${Math.round(ms)}ms)`,
+  );
 }
 
 const isDirectExecution = process.argv[1] && resolve(process.argv[1]) === scriptFile;
