@@ -97,6 +97,12 @@ export interface EmailFlowTokenClaims {
    * version, which makes the same token stale.
    */
   sv?: number;
+  /**
+   * Unique token id (#1444). Present on email verification tokens so each
+   * issued link is distinguishable even when two links are created in the
+   * same second.
+   */
+  jti?: string;
 }
 
 export function signEmailFlowToken(
@@ -114,11 +120,21 @@ export function verifyEmailFlowToken(
   expectedPurpose: EmailTokenPurpose
 ): ({ email: string } & EmailFlowTokenClaims) | null {
   try {
-    const payload = jwt.verify(token, EMAIL_TOKEN_SECRET) as { email?: string; purpose?: string; sv?: unknown };
+    const payload = jwt.verify(token, EMAIL_TOKEN_SECRET) as {
+      email?: string;
+      purpose?: string;
+      sv?: unknown;
+      jti?: unknown;
+    };
     if (payload.purpose !== expectedPurpose || !payload.email) {
       return null;
     }
-    return typeof payload.sv === "number" ? { email: payload.email, sv: payload.sv } : { email: payload.email };
+
+    return {
+      email: payload.email,
+      ...(typeof payload.sv === "number" ? { sv: payload.sv } : {}),
+      ...(typeof payload.jti === "string" ? { jti: payload.jti } : {}),
+    };
   } catch {
     return null;
   }
