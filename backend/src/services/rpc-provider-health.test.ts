@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { installRpcProviderFailover, parseRpcProviderUrls, RpcProviderHealthPolicy } from "./rpc-provider-health.js";
+import {
+  installRpcProviderFailover,
+  parseRpcProviderUrls,
+  RpcProviderHealthPolicy,
+} from "./rpc-provider-health.js";
 
 const PRIMARY = "https://rpc-a.example";
 const BACKUP = "https://rpc-b.example";
@@ -46,7 +50,9 @@ describe("RpcProviderHealthPolicy", () => {
       now: () => now,
     });
     policy.recordFailure(PRIMARY);
-    expect(() => policy.next()).toThrow("All Soroban RPC providers are temporarily unavailable");
+    expect(() => policy.next()).toThrow(
+      "All Soroban RPC providers are temporarily unavailable",
+    );
     now = 600;
     expect(policy.next()).toBe(PRIMARY);
     policy.recordSuccess(PRIMARY);
