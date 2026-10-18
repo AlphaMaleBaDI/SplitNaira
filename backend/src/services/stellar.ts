@@ -18,7 +18,11 @@ import {
 } from "./metrics.js";
 import { DEFAULT_RPC_MAX_RETRIES, boundRetryBudget } from "./rpc-retry-budget.js";
 import { installRpcResponseValidation } from "./rpc-response-validation.js";
-import { installRpcProviderFailover, parseRpcProviderUrls, RpcProviderHealthPolicy } from "./rpc-provider-health.js";
+import {
+  installRpcProviderFailover,
+  parseRpcProviderUrls,
+  RpcProviderHealthPolicy,
+} from "./rpc-provider-health.js";
 
 export { RPC_RETRY_BUDGET_MAX_RETRIES, boundRetryBudget } from "./rpc-retry-budget.js";
 
