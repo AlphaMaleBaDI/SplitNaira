@@ -314,4 +314,35 @@ describe("Issue #1461: API contract against generated OpenAPI", () => {
     expect(serialized).not.toContain("stack");
     expect(serialized).not.toContain("at Object.");
   });
+
+  it("rejects unsupported verbs on mutation resources without dispatching a mutation", async () => {
+    const unsupported = [
+      ["put", "/splits"],
+      ["patch", "/splits"],
+      ["delete", "/splits"],
+      ["put", "/users/me"],
+      ["post", "/transactions/history"],
+    ] as const;
+
+    for (const [method, path] of unsupported) {
+      const res = await request(app)[method](path).send({ name: "must not be created" });
+      expect(res.status, `${method.toUpperCase()} ${path}`).toBe(404);
+      expect(res.body).toMatchObject({
+        error: "not_found",
+        code: "NOT_FOUND",
+        message: "The requested resource does not exist.",
+      });
+      expect(JSON.stringify(res.body)).not.toContain("must not be created");
+    }
+  });
+
+  it("keeps HEAD as the GET equivalent and OPTIONS as CORS preflight", async () => {
+    const head = await request(app).head("/health/live");
+    expect(head.status).toBe(200);
+    expect(head.text ?? "").toBe("");
+
+    const options = await request(app).options("/splits");
+    expect(options.status).toBe(204);
+    expect(options.headers["access-control-allow-methods"]).toBeTruthy();
+  });
 });
