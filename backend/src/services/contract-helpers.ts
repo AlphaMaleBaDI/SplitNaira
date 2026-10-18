@@ -1,6 +1,11 @@
 import { z } from "zod";
-import { Address, nativeToScVal, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { Address, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { collaboratorSchema, createSplitSchema } from "../schemas/splits.js";
+import {
+  distributionCompleteEventValueSchema,
+  payoutEventValueSchema
+} from "../schemas/stellar-rpc.schemas.js";
+import { decodeContractValue } from "./rpc-response-validation.js";
 import { RequestValidationError } from "./stellar.js";
 
 export interface UpdateCollaboratorsRequest {
@@ -131,18 +136,24 @@ export function buildHistoryTopicFilters(projectId: string) {
   return { topicProjectId, roundTopic, paymentTopic };
 }
 
+/** @throws RpcResponseValidationError when the event data is not `(u32 round, i128 total >= 0)`. */
 export function decodeRoundHistoryEventValue(value: xdr.ScVal) {
-  const data = scValToNative(value) as [number | bigint, string | number | bigint];
+  const [round, amount] = decodeContractValue(
+    "getEvents:distribution_complete",
+    distributionCompleteEventValueSchema,
+    value
+  );
   return {
-    round: Number(data[0]),
-    amount: String(data[1])
+    round,
+    amount: amount.toString()
   };
 }
 
+/** @throws RpcResponseValidationError when the event data is not `(address, i128 amount > 0)`. */
 export function decodePaymentHistoryEventValue(value: xdr.ScVal) {
-  const data = scValToNative(value) as [string, string | number | bigint];
+  const [recipient, amount] = decodeContractValue("getEvents:payment_sent", payoutEventValueSchema, value);
   return {
-    recipient: data[0],
-    amount: String(data[1])
+    recipient,
+    amount: amount.toString()
   };
 }

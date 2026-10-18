@@ -525,6 +525,9 @@ describe("splits routes integration", () => {
   });
 
   it("retrieves history filtered and sorted", async () => {
+    // Soroban RPC returns 64-char hex hashes; history events are validated (#1494).
+    const TX_HASH_1 = "1f".repeat(32);
+    const TX_HASH_2 = "2f".repeat(32);
     getAccountMock.mockResolvedValue({ accountId: "GSIM" });
 
     getEventsMock
@@ -532,7 +535,7 @@ describe("splits routes integration", () => {
         events: [
           {
             value: [2, 100],
-            txHash: "TX2",
+            txHash: TX_HASH_2,
             ledgerClosedAt: "2025-01-02T00:00:00Z",
             id: "round-2",
           },
@@ -542,7 +545,7 @@ describe("splits routes integration", () => {
         events: [
           {
             value: ["GUSER", 50],
-            txHash: "TX1",
+            txHash: TX_HASH_1,
             ledgerClosedAt: "2025-01-01T00:00:00Z",
             id: "payment-1",
           },
@@ -559,7 +562,7 @@ describe("splits routes integration", () => {
           type: "round",
           round: 2,
           amount: "100",
-          txHash: "TX2",
+          txHash: TX_HASH_2,
           ledgerCloseTime: "2025-01-02T00:00:00Z",
           id: "round-2",
         },
@@ -567,7 +570,7 @@ describe("splits routes integration", () => {
           type: "payment",
           recipient: "GUSER",
           amount: "50",
-          txHash: "TX1",
+          txHash: TX_HASH_1,
           ledgerCloseTime: "2025-01-01T00:00:00Z",
           id: "payment-1",
         },
@@ -934,9 +937,13 @@ describe("Issue #1092: project ownership validation on owner-gated mutations", (
 
 describe("admin contract-state read routes", () => {
   it("GET /splits/admin/status returns admin address and pause status", async () => {
-    simulateTransactionMock.mockResolvedValue({
-      result: { retval: "GADMIN" },
-    });
+    // Each contract read gets a value of its own type (#1494 rejects a
+    // non-boolean pause flag). Reset first so values queued by earlier tests
+    // can't leak in.
+    simulateTransactionMock.mockReset();
+    simulateTransactionMock.mockImplementation(async (tx: { preparedOperation: { method: string } }) => ({
+      result: { retval: tx.preparedOperation.method === "is_distributions_paused" ? false : "GADMIN" },
+    }));
     getAccountMock.mockResolvedValue({ accountId: "GTESTSIMULATOR" });
 
     const app = createApp();

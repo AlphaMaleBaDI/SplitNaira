@@ -79,7 +79,11 @@ fn fully_distributed_then_paused<'a>() -> Fixture<'a> {
 
     fund_and_deposit(&env, &client, &token, &project_id, &owner, DEPOSIT);
     client.distribute(&project_id);
-    assert_eq!(client.get_balance(&project_id), 0, "fixture must be fully distributed");
+    assert_eq!(
+        client.get_balance(&project_id),
+        0,
+        "fixture must be fully distributed"
+    );
 
     client.pause_distributions(&admin);
     assert!(client.is_distributions_paused());
@@ -153,9 +157,18 @@ fn rejected_paused_claim_does_not_mutate_state() {
     assert_eq!(f.client.get_balance(&f.project_id), 0);
 
     let after_project = f.client.get_project(&f.project_id).unwrap();
-    assert_eq!(after_project.total_distributed, before_project.total_distributed);
-    assert_eq!(after_project.distribution_round, before_project.distribution_round);
-    assert_eq!(f.client.get_claimable(&f.project_id, &f.alice), before_claimable);
+    assert_eq!(
+        after_project.total_distributed,
+        before_project.total_distributed
+    );
+    assert_eq!(
+        after_project.distribution_round,
+        before_project.distribution_round
+    );
+    assert_eq!(
+        f.client.get_claimable(&f.project_id, &f.alice),
+        before_claimable
+    );
 }
 
 #[test]
@@ -172,7 +185,10 @@ fn payout_history_is_readable_while_paused() {
     let info = f.client.get_claimable(&f.project_id, &f.alice);
     assert_eq!(info.claimed, alice_share);
     assert_eq!(info.distribution_round, 1);
-    assert_eq!(info.last_claim_amount, 0, "push distribution is not a claim");
+    assert_eq!(
+        info.last_claim_amount, 0,
+        "push distribution is not a claim"
+    );
 
     let project = f.client.get_project(&f.project_id).unwrap();
     assert_eq!(project.total_distributed, DEPOSIT);
@@ -207,8 +223,16 @@ fn claim_after_unpause_returns_zero_without_moving_funds() {
     assert_eq!(f.client.claim(&f.project_id, &f.alice), 0);
 
     assert_eq!(token_balance(&f, &f.alice), alice_tokens);
-    assert_eq!(f.client.get_claimed(&f.project_id, &f.alice), claimed_before);
-    assert_eq!(f.client.get_claimable(&f.project_id, &f.alice).last_claim_amount, 0);
+    assert_eq!(
+        f.client.get_claimed(&f.project_id, &f.alice),
+        claimed_before
+    );
+    assert_eq!(
+        f.client
+            .get_claimable(&f.project_id, &f.alice)
+            .last_claim_amount,
+        0
+    );
 
     let project = f.client.get_project(&f.project_id).unwrap();
     assert_eq!(project.total_distributed, DEPOSIT);
@@ -239,12 +263,18 @@ fn deposit_during_pause_is_claimable_only_after_unpause() {
     // Only the new deposit is paid; the earlier round is not re-claimed.
     assert_eq!(f.client.claim(&f.project_id, &f.alice), expected);
     assert_eq!(token_balance(&f, &f.alice) - alice_tokens, expected);
-    assert_eq!(f.client.get_claimed(&f.project_id, &f.alice), claimed_before + expected);
+    assert_eq!(
+        f.client.get_claimed(&f.project_id, &f.alice),
+        claimed_before + expected
+    );
     assert_eq!(f.client.get_balance(&f.project_id), top_up - expected);
 
     let project = f.client.get_project(&f.project_id).unwrap();
     assert_eq!(project.total_distributed, DEPOSIT + expected);
-    assert_eq!(project.distribution_round, 1, "claim must not bump the push round");
+    assert_eq!(
+        project.distribution_round, 1,
+        "claim must not bump the push round"
+    );
 }
 
 #[test]

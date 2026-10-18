@@ -1,5 +1,15 @@
 import { z } from "zod";
 
+/** Hard ceiling for any transaction page, independent of the caller (#1259). */
+export const MAX_TRANSACTION_PAGE_SIZE = 100;
+
+const transactionPageFields = {
+  limit: z.coerce.number().int().min(1).max(MAX_TRANSACTION_PAGE_SIZE).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+  /** Opaque `(timestamp, id)` cursor returned as `nextCursor` by a prior page. */
+  cursor: z.string().min(1).max(512).optional(),
+};
+
 // Transaction history query schema
 export const transactionHistoryQuerySchema = z.object({
   walletAddress: z.string().regex(/^G[A-Z2-7]{55}$/, {
@@ -8,9 +18,11 @@ export const transactionHistoryQuerySchema = z.object({
   startDate: z.coerce.number().int().positive().optional(),
   endDate: z.coerce.number().int().positive().optional(),
   status: z.enum(["pending", "completed", "failed"]).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-  offset: z.coerce.number().int().min(0).default(0),
+  ...transactionPageFields,
 });
+
+// Recipient listing accepts the same page controls as /history (#1259).
+export const transactionRecipientQuerySchema = z.object(transactionPageFields);
 
 // Transaction export query schema (#1332).
 //
@@ -58,9 +70,13 @@ export const transactionHistoryResponseSchema = z.object({
   total: z.number().int().nonnegative(),
   limit: z.number().int(),
   offset: z.number().int(),
+  hasMore: z.boolean(),
+  /** Cursor for the next page, or null on the last page. */
+  nextCursor: z.string().nullable(),
 });
 
 export type TransactionHistoryQuery = z.infer<typeof transactionHistoryQuerySchema>;
+export type TransactionRecipientQuery = z.infer<typeof transactionRecipientQuerySchema>;
 export type TransactionExportQuery = z.infer<typeof transactionExportQuerySchema>;
 export type TransactionRecord = z.infer<typeof transactionRecordSchema>;
 export type TransactionHistoryResponse = z.infer<typeof transactionHistoryResponseSchema>;

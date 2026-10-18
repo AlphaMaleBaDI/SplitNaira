@@ -6,8 +6,7 @@ import {
   TransactionBuilder,
   nativeToScVal,
   scValToNative,
-  xdr,
-  rpc
+  xdr
 } from "@stellar/stellar-sdk";
 
 import {
@@ -26,6 +25,8 @@ import { AppError, ErrorCode, ErrorType } from "../lib/errors.js";
 import {
   createSplitSchema
 } from "../schemas/splits.js";
+import { contractBoolSchema, stroopAmountSchema } from "../schemas/stellar-rpc.schemas.js";
+import { decodeContractValue, readSimulationRetval } from "./rpc-response-validation.js";
 
 import {
   buildCreateProjectContractArgs,
@@ -112,7 +113,10 @@ export async function buildCreateProjectUnsignedXdr(
     "project_exists",
     [nativeToScVal(input.projectId, { type: "symbol" })],
   );
-  if (existingProject && scValToNative(existingProject) === true) {
+  if (
+    existingProject &&
+    decodeContractValue("simulateTransaction:project_exists", contractBoolSchema, existingProject)
+  ) {
     throw new AppError(
       ErrorType.CONFLICT,
       ErrorCode.PROJECT_EXISTS,
@@ -189,7 +193,7 @@ export async function simulateReadOnlyContractCall(
     .build();
 
   const simulated = await server.simulateTransaction(tx);
-  return "result" in simulated ? simulated.result?.retval : undefined;
+  return readSimulationRetval(method, simulated);
 }
 
 export async function fetchProjectsFromContract(start: number, limit: number) {
@@ -217,7 +221,7 @@ export async function fetchProjectsFromContract(start: number, limit: number) {
       .build();
 
     const simulated = await executeWithRetry(() => server.simulateTransaction(tx), { operation: "simulateTransaction" });
-    const retval = "result" in simulated ? simulated.result?.retval : undefined;
+    const retval = readSimulationRetval("list_projects", simulated);
     if (!retval) {
       return [];
     }
@@ -284,7 +288,7 @@ export async function fetchProjectById(projectId: string) {
       .build();
 
     const simulated = await executeWithRetry(() => server.simulateTransaction(tx), { operation: "simulateTransaction" });
-    const retval = "result" in simulated ? simulated.result?.retval : undefined;
+    const retval = readSimulationRetval("get_project", simulated);
     if (!retval) {
       return null;
     }
@@ -293,7 +297,9 @@ export async function fetchProjectById(projectId: string) {
       "get_balance",
       [nativeToScVal(projectId, { type: "symbol" })]
     );
-    const balance = balanceRetval ? String(scValToNative(balanceRetval)) : "0";
+    const balance = balanceRetval
+      ? decodeContractValue("simulateTransaction:get_balance", stroopAmountSchema, balanceRetval).toString()
+      : "0";
     const project = scValToNative(retval) as unknown;
     return project !== null && project !== undefined
       ? {
@@ -510,7 +516,7 @@ export async function buildUpdateMetadataUnsignedXdr(input: {
   await assertProjectOwner(input.projectId, input.owner);
 
   const config = loadStellarConfig();
-  const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
+  const server = getStellarRpcServer();
 
   let sourceAccount;
   try {

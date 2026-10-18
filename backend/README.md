@@ -64,13 +64,22 @@ Cross-cutting contracts enforced by tests. See
   [`../docs/rate-limiting-guidance.md`](../docs/rate-limiting-guidance.md).
 - **API contract tests** — `src/__tests__/api-contract.test.ts` runs the real
   app against the generated OpenAPI document and fails on undocumented response
-  fields or lost contracts.
+  fields or lost contracts. Public JSON responses are checked against their
+  documented fields; admin and ops responses also receive runtime Zod
+  validation. Streaming SSE and Prometheus endpoints are intentionally excluded
+  from single-response validation. Unsupported verbs return the standard 404,
+  with `HEAD` and CORS `OPTIONS` retaining their HTTP framework behavior. See
+  [`../docs/api-surface-contracts.md`](../docs/api-surface-contracts.md).
 
 ## Read caching
 
 The shared in-process read cache is limited to public Soroban contract reads: paginated project lists and project details (including their on-chain balance). Entries live for 30 seconds by default; `READ_CACHE_TTL_MS` and `READ_CACHE_MAX_ENTRIES` configure the TTL and bounded capacity. Cache keys are resource-based, never user-based, because these endpoints contain shared on-chain state and no caller-specific fields. Do not add authenticated account data, permissions, or personalized results to this cache; those require user-scoped keys or must remain uncached.
 
 Preparing project mutation XDRs evicts affected project detail and list entries so the next request re-reads Soroban state. Because the client submits the XDR after receiving it, the TTL is also the backstop for submitted transactions and state changes made outside this API. Invalidated in-flight reads can complete for their original callers, but cannot repopulate the cache or replace a newer read.
+
+## Soroban RPC response validation
+
+Every Soroban RPC response is schema-validated before use (issue #1494). `getStellarRpcServer()` installs a JSON-RPC envelope and wire-schema check on the SDK's HTTP client, and call sites decode contract values (amounts as exact `bigint`, strict booleans and counts) with the schemas in `src/schemas/stellar-rpc.schemas.ts`. Malformed responses fail with `RpcResponseValidationError` (HTTP 502, `RPC_RESPONSE_INVALID`) and are never recorded as payments. Always obtain the server from `getStellarRpcServer()`. See [docs/stellar-rpc-response-validation.md](../docs/stellar-rpc-response-validation.md) before adding an RPC call.
 
 ## Notes
 
@@ -103,7 +112,8 @@ The backend includes comprehensive production-grade hardening:
 - **Input validation** — Zod schemas on all routes with consistent 400 error responses
 - **Error handling** — Centralized `AppError` mapping with user-friendly remediation hints
 - **Rate limiting** — Layered per-endpoint limits (global, read, write, admin)
-- **Response validation** — Middleware validates all JSON responses match schemas
+- **Response validation** — Runtime Zod validation covers admin and ops routes;
+  public JSON contracts are checked against OpenAPI in automated tests
 - **Security headers** — Helmet.js for CSP, HSTS, X-Frame-Options, etc.
 - **Payments admin hardening** — `/splits/admin/*` protected by `PAYMENTS_ADMIN_API_KEY`; writes toggleable via `PAYMENTS_ADMIN_WRITE_ENABLED`
 
@@ -112,6 +122,10 @@ The backend includes comprehensive production-grade hardening:
 - [`../docs/PLATFORM_HARDENING_IMPLEMENTATION.md`](../docs/PLATFORM_HARDENING_IMPLEMENTATION.md) — implementation details, monitoring, and rollback
 - [`../docs/PLATFORM_HARDENING_DEPLOYMENT_CHECKLIST.md`](../docs/PLATFORM_HARDENING_DEPLOYMENT_CHECKLIST.md) — operator checklist for safe deployment
 - [`../docs/backend-release-ops-wave5.md`](../docs/backend-release-ops-wave5.md) — deployment procedures and CI commands
+- [`../docs/database-schema-conventions.md`](../docs/database-schema-conventions.md) — entity naming, indexes, constraints, migration review (enforced by `schema-conventions.test.ts`)
+- [`../docs/database-connection-lifecycle.md`](../docs/database-connection-lifecycle.md) — connection release guarantees on failure and shutdown
+- [`../docs/collaboration-concurrency.md`](../docs/collaboration-concurrency.md) — isolation requirements for membership and role changes
+- [`../docs/ledger-transaction-finality.md`](../docs/ledger-transaction-finality.md) — per-network confirmation assumptions and finality transitions
 
 ### Transaction Safety Example
 
@@ -136,6 +150,10 @@ Run tests to verify hardening:
 ```bash
 npm test -- error-scenarios.test.ts    # Validation & error handling
 npm test -- transaction-safety.test.ts # Database transaction rollback
+npm test -- database-connection-leak     # Connection release on failure/shutdown
+npm test -- schema-conventions           # Entity + migration naming rules
+npm test -- membership-isolation         # Concurrent collaborator changes
+npm test -- ledger-finality              # Per-network finality policy
 npm test                                # All tests
 ```
 

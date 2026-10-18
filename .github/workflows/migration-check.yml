@@ -32,6 +32,8 @@ jobs:
       # deployment DATABASE_URL to a command that recreates its target DB.
       MIGRATION_DRY_RUN_DATABASE_URL: postgresql://splitnaira_test:test_password_123@localhost:5432/splitnaira_migration_test
       MIGRATION_DRY_RUN_ADMIN_DATABASE_URL: postgresql://splitnaira_test:test_password_123@localhost:5432/postgres
+      # Emit a JSON timing line on stdout after migration:run completes.
+      MIGRATION_TIMING: "1"
 
     steps:
       - name: Checkout Code
@@ -46,5 +48,44 @@ jobs:
       - name: Install Dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Run Migration Dry-Run
-        run: npm run migration:dry-run
+      - name: Run Migration Dry-Run (with timing)
+        # Capture stdout to a file so we can extract the timing JSON line
+        # while still streaming the human-readable TypeORM output to the job
+        # log. tee preserves the exit code of the left-hand process on bash.
+        run: |
+          set -o pipefail
+          npm run migration:dry-run 2>&1 | tee migration-dry-run.log
+        shell: bash
+
+      - name: Extract and emit timing report
+        if: always()
+        # Parse the JSON timing line written by runMigrationsWithTiming.
+        # The line has the form: {"event":"migration_timing","step":"migration:run","durationMs":NNN,...}
+        # We surface it as a GitHub Actions job summary so it is visible in the PR check UI.
+        run: |
+          TIMING_LINE=$(grep -m1 '"event":"migration_timing"' migration-dry-run.log || true)
+          if [ -n "$TIMING_LINE" ]; then
+            DURATION_MS=$(echo "$TIMING_LINE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['durationMs'])" 2>/dev/null || echo "unknown")
+            echo "## Migration Timing" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Step | Duration |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|------|----------|" >> "$GITHUB_STEP_SUMMARY"
+            echo "| \`migration:run\` (full chain) | ${DURATION_MS}ms |" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Raw report: \`$TIMING_LINE\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No timing line found in migration output." >> "$GITHUB_STEP_SUMMARY"
+          fi
+        shell: bash
+
+      - name: Run migration timing and locking benchmarks
+        # Run only the migration-timing test group. DATABASE_URL is pointed at
+        # the service database that already has all migrations applied by the
+        # dry-run step above, so the suite connects and skips when unavailable
+        # but fails when CI=true and the connection fails.
+        env:
+          DATABASE_URL: postgresql://splitnaira_test:test_password_123@localhost:5432/splitnaira_migration_test
+          CI: "true"
+        run: npm run test -w backend -- --reporter=verbose src/__tests__/migration-timing.test.ts
+        # A non-zero exit from the benchmark step must fail the job.
+        continue-on-error: false

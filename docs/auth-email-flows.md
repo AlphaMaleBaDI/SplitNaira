@@ -1,6 +1,6 @@
-# Auth Email Flows: Verification Resend and Password Reset
+# Auth Email Flows: Verification, Password Reset, Logout and Email Change
 
-Covers the email verification resend cooldown (#1443) and session invalidation after a password reset (#1446). All endpoints are under `/auth` and share the IP-based `authLimiter` (10 requests per 5 minutes by default). The protections below are in addition to that limit, not a replacement for it.
+Covers the email verification resend cooldown (#1443), session invalidation after a password reset (#1446), logout across tabs (#1451), correlation IDs in auth logs and responses (#1450), email enumeration guarantees (#1449) and the confirmed email change workflow (#1448). All endpoints are under `/auth` and share the IP-based `authLimiter` (10 requests per 5 minutes by default). The protections below are in addition to that limit, not a replacement for it.
 
 ## Email verification
 
@@ -23,7 +23,29 @@ Request: `{ "email": "user@example.com", "verifyUrlBase"?: "https://..." }`
 
 ### `POST /auth/email-verification/confirm`
 
-Request: `{ "token": "..." }`. On success, sets `emailVerifiedAt` on every account with that email that isn't already verified, and returns `200 { "success": true, "email": "..." }`. An invalid, expired, or wrong-purpose token returns `400 invalid_or_expired_token`. Links last `EMAIL_VERIFICATION_TOKEN_TTL` (default 24h).
+Request: `{ "token": "..." }`. On success, sets `emailVerifiedAt` on every account with that email that isn't already verified, and returns `200 { "success": true, "email": "..." }`. An invalid, expired, wrong-purpose, reused, or superseded token returns `400 invalid_or_expired_token`. Links last `EMAIL_VERIFICATION_TOKEN_TTL` (default 24h).
+
+### Token rotation and single use (#1444)
+
+A verification link is only valid while it is the address's current, unconsumed entry in
+`email_verification_tokens`. The table has exactly one row per email (unique index on `email`), so:
+
+- **Resend rotates.** A resend replaces the row's `tokenHash` with a single `upsert` on `email`.
+  Every link issued before that resend stops working, and two concurrent resends cannot leave two
+  live links — whichever commits last is the live one.
+- **Confirm consumes.** Confirming runs a conditional
+  `UPDATE ... WHERE email = ... AND "tokenHash" = ... AND "consumedAt" IS NULL AND "expiresAt" > now`.
+  Exactly one caller can match, so a replay, an older link, and a concurrent confirm all fail
+  closed.
+- **Expiry is enforced twice.** The JWT's own `exp` is checked first, then the row's `expiresAt`.
+- **Wrong account is impossible.** The confirmation always applies to the email inside the signed
+  token. An `email` field in the request body is ignored.
+- **Send failure leaves nothing live.** If the email send fails after the rotation commits, the
+  just-issued hash is consumed immediately, so the address is left with no usable link and the
+  resend cooldown is released for a retry.
+
+Tokens issued before this change have no stored row and therefore cannot be confirmed; the next
+resend issues a tracked one. No backfill is required.
 
 ## Password reset and session invalidation
 
@@ -58,12 +80,113 @@ On success (`200 { "success": true, "email": "...", "sessionsRevoked": true }`):
 ### Rollout
 
 - **Migration:** `1760000000012-AddUserSessionVersionAndEmailVerification` adds `sessionVersion INTEGER NOT NULL DEFAULT 0` and `emailVerifiedAt TIMESTAMPTZ` to `users`.
+- **Migration:** `1760000000014-AddEmailVerificationTokens` creates `email_verification_tokens`, the one-row-per-email store for #1444.
 - **Existing tokens:** wallet JWTs and reset tokens issued before the deploy have no `sv` claim and are treated as version 0. Nobody is logged out by the deploy itself; old tokens stop working only after that account's first password reset.
 - **Cost:** every authenticated request now does one indexed lookup on `users.walletAddress`. If that lookup fails, the request fails with `500` rather than skipping the check.
+
+## Logout and other tabs (#1451)
+
+### `POST /auth/logout`
+
+Requires `Authorization: Bearer <token>`. Response: `200 { "success": true, "sessionsRevoked": true, "requestId": "..." }`.
+
+Wallet JWTs are stateless, so every tab holds its own copy of the same token and there is no single "current session" to delete. Logout therefore bumps the account's `sessionVersion` (the #1446 mechanism). The effect is the same in every tab and device at once:
+
+| Who | What they see next |
+|---|---|
+| The tab that logged out | The token no longer works. |
+| Every other tab or device holding a token for this wallet | `401 SESSION_REVOKED` on its next request, the same response a password reset produces. Clients need one "signed out" code path: clear the token and go to sign in. |
+| A fresh `POST /users/login` afterwards | A token for the new session version; it works. |
+| Other wallets | Unaffected. |
+
+- **Race safety:** the bump is conditional on the `sv` in the token that asked to log out. Two tabs logging out at once bump it once, and a logout with an old token can't revoke a session created after it. If another tab got there first, the response is `200` with `"sessionsRevoked": false`.
+- **Stale tokens:** logging out with an already-revoked token is rejected by the auth middleware with `401 SESSION_REVOKED`, like any other request.
+- **No account row:** a token for a wallet with no `users` row has no version to compare against (see the table above), so there is nothing to revoke: `200` with `"sessionsRevoked": false`.
+- **Scope:** logout signs the wallet out everywhere, not just in one tab. Per-tab logout would need server-side session records, which wallet JWTs deliberately don't have.
+
+## Correlation IDs (#1450)
+
+Every response carries `x-request-id` and `x-correlation-id` headers. Error bodies and the bodies of `/auth/logout` and `/auth/email-change/*` also carry `requestId`, the same value. The success bodies of the older endpoints (password reset, verification) are unchanged, so read the header there. Quote the id when reporting a problem; every auth log line for that request carries it too.
+
+**Inbound ids.** A client may send its own `x-request-id` or `x-correlation-id`. It is used only if it is 1 to 64 characters of `A-Za-z0-9._:-` and is not shaped like a JWT. Anything else (spaces, newlines, quotes, over-long values, a pasted token) is dropped and a UUID is generated instead, so a client can't inject log lines or get a credential written to logs and echoed back. If `x-request-id` is unusable, `x-correlation-id` is tried before generating one.
+
+**Auth events.** Each outcome writes one structured `auth_event` log line (warn level for failures):
+
+```json
+{ "message": "auth_event", "event": "logout", "outcome": "success", "requestId": "...", "userId": "...", "emailHash": "9f2c...", "reason": "SESSION_REVOKED", "sessionsRevoked": true }
+```
+
+Events: `login`, `logout`, `session_rejected`, `password_reset_requested`, `password_reset_confirmed`, `email_verification_resent`, `email_verified`, `email_change_requested`, `email_change_confirmed`. The fields are a closed list (`services/auth-events.ts`), so credentials can't be added by accident:
+
+- `userId` is the internal id, never the wallet address.
+- Emails appear only as a 16-character SHA-256 hash (`emailHash`), so events about one address can be correlated without storing it.
+- `reason` is a short code; anything else is dropped.
+- Tokens, passwords, `Authorization` headers and reset/confirmation links are never logged. The console email provider logs links as origin and path only (`https://app.example.com/reset`), without the `?token=` part.
+
+## Email enumeration (#1449)
+
+No sign-in or recovery response reveals whether an address has an account. These guarantees are covered by `auth-enumeration.test.ts`:
+
+| Endpoint | Guarantee |
+|---|---|
+| `POST /auth/password-reset/request` | Same `202` body and headers for registered (verified or not) and unregistered addresses. |
+| `POST /auth/email-verification/resend` | Same `202`, and the same `429` cooldown shape, for unverified, verified and unregistered addresses. |
+| `POST /auth/email-change/request` | Same `202` whether or not the new address already belongs to another account. The address is never looked up. |
+| `POST /users/login` | Signs in by wallet only; an `email` in the body is ignored and never reflected. |
+| Validation errors | Do not echo the submitted address. |
+
+Timing is not equalized: for a registered address the server also builds a token and hands an email to the provider. Keep the provider call asynchronous (queue it) in production so that work doesn't show up in latency.
+
+## Changing the email address (#1448)
+
+An address change takes effect only after the owner of the **new** address confirms it. `PATCH /users/me` no longer changes the address: sending a different `email` returns `400` pointing at this workflow (re-sending the current address is accepted as a no-op).
+
+### `POST /auth/email-change/request`
+
+Requires a bearer token. Request: `{ "newEmail": "new@example.com" }`.
+
+| Situation | Response |
+|---|---|
+| Accepted | `202 { "success": true, "requestId": "..." }`. Nothing has changed yet. |
+| Same as the current address (ignoring case and spaces) | `400 { "code": "EMAIL_UNCHANGED" }` |
+| Invalid or over-long address | `400 validation_error` |
+| No token or revoked session | `401` |
+| Account deleted | `404` |
+
+On success:
+
+1. A confirmation link goes to the **new** address. Links last `EMAIL_CHANGE_TOKEN_TTL` (default 24h) and point at `EMAIL_CHANGE_URL_BASE`. The base is not accepted from the request, so a caller can't send a victim a link to a site of their choosing.
+2. If the account has a **prior** address, it gets a notice that a change was requested, naming the new address only in masked form (`n***@example.com`). This is best effort: a failed notice does not block the user's own change.
+3. The request is written to the audit log as `email_change_requested` with the user id and hashes of both addresses.
+
+### `POST /auth/email-change/confirm`
+
+Request: `{ "token": "..." }`. No bearer token is needed; the link itself proves control of the new address. `200 { "success": true, "email": "new@example.com", "requestId": "..." }`, otherwise `400 invalid_or_expired_token`.
+
+The link is bound to the account, the address it had when the link was issued, and its session version. It is rejected unless all three still match, which means:
+
+- **Single use.** Once the address changes, the same link matches nothing. Concurrent confirms apply once (the update is conditional on the same values).
+- **Superseded by newer changes.** Confirming a newer link kills older ones.
+- **Dead after a logout or password reset**, and for deleted accounts.
+
+On success the new address is stored and marked verified, the prior address (if any) gets a "your email was changed" notice, and `email_changed` is written to the audit log. Sessions are not revoked: the user proved control of the new address and keeps working. Use `POST /auth/logout` if you want to sign everything out.
+
+### Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `EMAIL_CHANGE_TOKEN_TTL` | `24h` | Lifetime of the confirmation link |
+| `EMAIL_CHANGE_URL_BASE` | `https://app.splitnaira.com/confirm-email-change` | Page the link opens; it receives `?token=...` |
 
 ## Tests
 
 - `backend/src/__tests__/email-verification-resend.test.ts`
+- `backend/src/__tests__/email-verification-rotation.test.ts`
+- `backend/src/__tests__/email-verification-token.test.ts`
 - `backend/src/__tests__/session-revocation.test.ts`
+- `backend/src/__tests__/auth-logout.test.ts` (#1451)
+- `backend/src/__tests__/auth-correlation.test.ts` (#1450)
+- `backend/src/__tests__/auth-enumeration.test.ts` (#1449)
+- `backend/src/__tests__/email-change.test.ts` (#1448)
 
-These tests replace the database with mocks. The conditional `UPDATE` in `services/session-revocation.ts` needs a real Postgres to be exercised.
+These tests replace the database with mocks. The conditional `UPDATE` in `services/session-revocation.ts` and the conditional consume/invalidate `UPDATE`s in `services/email-verification-token.ts` need a real Postgres to be exercised end to end; `email-verification-token.test.ts` pins the SQL shape they build.

@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, token, Address, Env, Map, String, Symbol, Vec,
+    contract, contractimpl, contracttype, panic_with_error, token, Address, Env, Map, String,
+    Symbol, Vec,
 };
 
 /// Number of project IDs stored per bucket to avoid loading the entire index
@@ -13,48 +14,40 @@ const PROJECT_ID_BUCKET_SIZE: u32 = 100;
 mod errors;
 mod events;
 use events::{
-    Publishable,
-    MaxCollaboratorsUpdated,
-    CollaboratorsUpdated,
-    DepositReceived,
-    DistributionComplete,
-    DistributionsPaused,
-    DistributionsUnpaused,
-    MetadataUpdated,
-    OwnershipTransferred,
-    PaymentSent,
-    ProjectCreated,
-    ProjectLocked,
-    CollaboratorClaimed,
-    TokenAllowed,
-    TokenDisallowed,
-    UnallocatedWithdrawn,
-    SplitsUpdatedWithPendingBalance,
-    AccountingDiscrepancy,
+    AccountingDiscrepancy, CollaboratorClaimed, CollaboratorsUpdated, DepositReceived,
+    DistributionComplete, DistributionsPaused, DistributionsUnpaused, MaxCollaboratorsUpdated,
+    MetadataUpdated, OwnershipTransferred, PaymentSent, ProjectCreated, ProjectLocked, Publishable,
+    SplitsUpdatedWithPendingBalance, TokenAllowed, TokenDisallowed, UnallocatedWithdrawn,
 };
-#[cfg(test)]
-mod tests;
-#[cfg(test)]
-mod hardening_tests;
-#[cfg(test)]
-mod reliability_tests;
-#[cfg(test)]
-mod authorization_tests;
 #[cfg(test)]
 mod address_validation_tests;
 #[cfg(test)]
-mod ttl_renewal_tests;
+mod authorization_coverage_tests;
+#[cfg(test)]
+mod authorization_tests;
+#[cfg(test)]
+mod budget_regression_tests;
 #[cfg(test)]
 mod cost_benchmark_tests;
 #[cfg(test)]
 mod deposit_property_tests;
 #[cfg(test)]
-mod split_sum_property_tests;
+mod duplicate_claim_tests;
+#[cfg(test)]
+mod failure_invariant_tests;
+#[cfg(test)]
+mod hardening_tests;
+#[cfg(test)]
+mod lifecycle_integration_tests;
 mod pause_claim_tests;
 #[cfg(test)]
 mod pause_state_transition_tests;
 #[cfg(test)]
-mod duplicate_claim_tests;
+mod reliability_tests;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod ttl_renewal_tests;
 
 use errors::SplitError;
 
@@ -305,11 +298,7 @@ impl SplitNairaContract {
     /// * `SplitError::Unauthorized`           - caller is not the admin
     /// * `SplitError::AdminNotSet`            - admin has not been configured
     /// * `SplitError::InvalidMaxCollaborators`- value outside the allowed range
-    pub fn set_max_collaborators(
-        env: Env,
-        admin: Address,
-        value: u32,
-    ) -> Result<(), SplitError> {
+    pub fn set_max_collaborators(env: Env, admin: Address, value: u32) -> Result<(), SplitError> {
         Self::require_contract_admin(&env, &admin)?;
 
         if value < MIN_MAX_COLLABORATORS || value > MAX_MAX_COLLABORATORS {
@@ -682,15 +671,15 @@ impl SplitNairaContract {
     /// collaborators according to their basis point shares.
     ///
     /// Compatibility-sensitive invariants:
-/// - `distribution_round` increments exactly once per successful call
-/// - `total_distributed` increases by the exact amount paid out
-/// - the final collaborator receives any integer-division remainder so
-///   the full project balance is accounted for every round
-/// - Distribution is rejected if the project balance is smaller than the
-///   number of collaborators. This is a minimum balance only: a low-bps
-///   share can still round down to zero, in which case no transfer or
-///   `payment_sent` event is emitted for that collaborator. See
-///   docs/contract-distribution-remainder-accounting.md.
+    /// - `distribution_round` increments exactly once per successful call
+    /// - `total_distributed` increases by the exact amount paid out
+    /// - the final collaborator receives any integer-division remainder so
+    ///   the full project balance is accounted for every round
+    /// - Distribution is rejected if the project balance is smaller than the
+    ///   number of collaborators. This is a minimum balance only: a low-bps
+    ///   share can still round down to zero, in which case no transfer or
+    ///   `payment_sent` event is emitted for that collaborator. See
+    ///   docs/contract-distribution-remainder-accounting.md.
     ///
     /// Anyone can call distribute Ã¢â‚¬â€ the math is trustless.
     ///
@@ -714,21 +703,21 @@ impl SplitNairaContract {
 
         let mut project = Self::get_project_or_err(&env, &project_id)?;
 
-       let balance: i128 = env
-    .storage()
-    .persistent()
-    .get::<DataKey, i128>(&DataKey::ProjectBalance(project_id.clone()))
-    .unwrap_or(0);
+        let balance: i128 = env
+            .storage()
+            .persistent()
+            .get::<DataKey, i128>(&DataKey::ProjectBalance(project_id.clone()))
+            .unwrap_or(0);
 
-if balance <= 0 {
-    return Err(SplitError::NoBalance);
-}
+        if balance <= 0 {
+            return Err(SplitError::NoBalance);
+        }
 
-// Reject tiny balances that would otherwise result in one collaborator
-// receiving the entire remainder while others receive zero.
-if balance < project.collaborators.len() as i128 {
-    return Err(SplitError::NoBalance);
-}
+        // Reject tiny balances that would otherwise result in one collaborator
+        // receiving the entire remainder while others receive zero.
+        if balance < project.collaborators.len() as i128 {
+            return Err(SplitError::NoBalance);
+        }
 
         let token_client = token::Client::new(&env, &project.token);
         let contract_address = env.current_contract_address();
@@ -824,11 +813,10 @@ if balance < project.collaborators.len() as i128 {
 
         let mut results = Vec::new(&env);
         for project_id in project_ids.iter() {
-
             if Self::is_distributions_paused(env.clone()) {
                 panic_with_error!(&env, SplitError::DistributionsPaused);
             }
-            
+
             match Self::distribute(env.clone(), project_id.clone()) {
                 Ok(_) => results.push_back((project_id, None)),
                 Err(SplitError::DistributionsPaused) => {
@@ -847,11 +835,7 @@ if balance < project.collaborators.len() as i128 {
 
     /// Self-service pull payout for one collaborator. Does not increment
     /// `distribution_round` (push-only counter).
-    pub fn claim(
-        env: Env,
-        project_id: Symbol,
-        claimer: Address,
-    ) -> Result<i128, SplitError> {
+    pub fn claim(env: Env, project_id: Symbol, claimer: Address) -> Result<i128, SplitError> {
         claimer.require_auth();
 
         let paused: bool = env
@@ -1036,35 +1020,29 @@ if balance < project.collaborators.len() as i128 {
         result
     }
 
-    pub fn list_project_summaries(
-    env: Env,
-    start: u32,
-    limit: u32,
-) -> Vec<ProjectSummary> {
-    let ids = Self::get_project_ids_from_buckets(&env, start, limit);
+    pub fn list_project_summaries(env: Env, start: u32, limit: u32) -> Vec<ProjectSummary> {
+        let ids = Self::get_project_ids_from_buckets(&env, start, limit);
 
-    let mut result = Vec::new(&env);
+        let mut result = Vec::new(&env);
 
-    for project_id in ids.iter() {
-        if let Some(project) = env
-            .storage()
-            .persistent()
-            .get::<DataKey, SplitProject>(
-                &DataKey::Project(project_id),
-            )
-        {
-            result.push_back(ProjectSummary {
-                project_id: project.project_id,
-                title: project.title,
-                owner: project.owner,
-                locked: project.locked,
-                distribution_round: project.distribution_round,
-            });
+        for project_id in ids.iter() {
+            if let Some(project) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, SplitProject>(&DataKey::Project(project_id))
+            {
+                result.push_back(ProjectSummary {
+                    project_id: project.project_id,
+                    title: project.title,
+                    owner: project.owner,
+                    locked: project.locked,
+                    distribution_round: project.distribution_round,
+                });
+            }
         }
-    }
 
-    result
-}
+        result
+    }
 
     /// Returns the project-scoped distributable balance.
     pub fn get_balance(env: Env, project_id: Symbol) -> Result<i128, SplitError> {
@@ -1127,11 +1105,19 @@ if balance < project.collaborators.len() as i128 {
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&contract_address, &to, &amount);
 
-        env.storage().persistent().extend_ttl(
-            &DataKey::AccountedTokenBalance(token.clone()),
-            PROJECT_TTL_THRESHOLD_LEDGERS,
-            PROJECT_TTL_BUMP_LEDGERS,
-        );
+        // Only renew the accounted-balance entry when it exists: this path is
+        // also the documented recovery route for direct token transfers into
+        // the contract, which can run before any project ever recorded an
+        // accounted balance, and `extend_ttl` on a missing persistent key
+        // traps the invocation.
+        let accounted_key = DataKey::AccountedTokenBalance(token.clone());
+        if env.storage().persistent().has(&accounted_key) {
+            env.storage().persistent().extend_ttl(
+                &accounted_key,
+                PROJECT_TTL_THRESHOLD_LEDGERS,
+                PROJECT_TTL_BUMP_LEDGERS,
+            );
+        }
 
         let remaining = available - amount;
         UnallocatedWithdrawn {
@@ -1268,8 +1254,7 @@ if balance < project.collaborators.len() as i128 {
                         .set(&DataKey::ProjectIdsBucket(target_bucket), &bucket);
                 }
             }
-            let new_bucket_count =
-                (flat_ids.len() as u32 - 1) / PROJECT_ID_BUCKET_SIZE + 1;
+            let new_bucket_count = (flat_ids.len() as u32 - 1) / PROJECT_ID_BUCKET_SIZE + 1;
             env.storage()
                 .persistent()
                 .set(&DataKey::ProjectIdsBucketCount, &new_bucket_count);
@@ -1298,10 +1283,7 @@ if balance < project.collaborators.len() as i128 {
         let last_claim_amount = env
             .storage()
             .persistent()
-            .get::<DataKey, i128>(&DataKey::LastClaimAmount(
-                project_id,
-                collaborator,
-            ))
+            .get::<DataKey, i128>(&DataKey::LastClaimAmount(project_id, collaborator))
             .unwrap_or(0);
         Ok(ClaimableInfo {
             claimed,
@@ -1446,8 +1428,7 @@ if balance < project.collaborators.len() as i128 {
                 PROJECT_TTL_BUMP_LEDGERS,
             );
         }
-        let last_claim_key =
-            DataKey::LastClaimAmount(project_id.clone(), collaborator.clone());
+        let last_claim_key = DataKey::LastClaimAmount(project_id.clone(), collaborator.clone());
         if env.storage().persistent().has(&last_claim_key) {
             env.storage().persistent().extend_ttl(
                 &last_claim_key,
@@ -1700,4 +1681,3 @@ if balance < project.collaborators.len() as i128 {
         Ok(total)
     }
 }
-

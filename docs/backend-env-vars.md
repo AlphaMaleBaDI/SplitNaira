@@ -31,6 +31,8 @@ Related docs:
 | DATABASE_POOL_MAX | Backend/Performance | dev, staging, prod (optional) | Public | DB connection pool size |
 | EMAIL_VERIFICATION_RESEND_COOLDOWN_MS | Backend/Auth | dev, staging, prod (optional) | Public | Per-email wait between verification email sends. Defaults to `60000`; invalid or non-positive values fall back to the default. See `auth-email-flows.md` |
 | EMAIL_VERIFICATION_TOKEN_TTL | Backend/Auth | dev, staging, prod (optional) | Public | Lifetime of email verification links. Defaults to `24h` |
+| EMAIL_CHANGE_TOKEN_TTL | Backend/Auth | dev, staging, prod (optional) | Public | Lifetime of email change confirmation links (#1448). Defaults to `24h` |
+| EMAIL_CHANGE_URL_BASE | Backend/Auth | dev, staging, prod (optional) | Public | Page the email change confirmation link opens. Defaults to `https://app.splitnaira.com/confirm-email-change` |
 | EMAIL_VERIFICATION_URL_BASE | Backend/Auth | staging, prod (optional) | Public | Frontend page the verification link points to. Defaults to `https://app.splitnaira.com/verify-email` |
 
 ## Secret vs Public Config

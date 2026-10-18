@@ -17,6 +17,14 @@ import { createHash } from "node:crypto";
 import { IsNull } from "typeorm";
 import { getMaxSessionVersionForEmail, revokeSessionsForEmail } from "../services/session-revocation.js";
 import { verificationResendCooldown } from "../services/verification-resend-cooldown.js";
+import { logAuthEvent } from "../services/auth-events.js";
+import {
+  consumeEmailVerificationToken,
+  hashEmailVerificationToken,
+  invalidateEmailVerificationToken,
+  issueEmailVerificationToken,
+  rotateEmailVerificationToken,
+} from "../services/email-verification-token.js";
 
 export const authEmailRouter = Router();
 
@@ -58,6 +66,8 @@ authEmailRouter.post("/password-reset/request", async (req: Request, res: Respon
     });
 
     if (!user) {
+      // Same response as the known-account path; only the server log differs.
+      logAuthEvent(res, "password_reset_requested", "success", { email, reason: "no_account" });
       return res.status(202).json({ success: true });
     }
 
@@ -74,6 +84,7 @@ authEmailRouter.post("/password-reset/request", async (req: Request, res: Respon
       resetUrl,
     });
 
+    logAuthEvent(res, "password_reset_requested", "success", { userId: user.id, email });
     return res.status(202).json({ success: true });
   } catch (error) {
     return next(error);
@@ -97,16 +108,19 @@ authEmailRouter.post("/password-reset/confirm", async (req: Request, res: Respon
     const { token } = passwordResetConfirmSchema.parse(req.body);
     const payload = verifyEmailFlowToken(token, "password_reset");
     if (!payload) {
-      return res.status(400).json({ error: "invalid_or_expired_token" });
+      logAuthEvent(res, "password_reset_confirmed", "failure", { reason: "invalid_or_expired_token" });
+      return res.status(400).json({ error: "invalid_or_expired_token", requestId: res.locals.requestId });
     }
 
     // Tokens issued before #1446 carry no `sv`; they were issued against version 0.
     const revoked = await revokeSessionsForEmail(payload.email, payload.sv ?? 0);
     if (revoked === 0) {
       // Already used, superseded by a newer reset, or no account left for this email.
-      return res.status(400).json({ error: "invalid_or_expired_token" });
+      logAuthEvent(res, "password_reset_confirmed", "failure", { email: payload.email, reason: "invalid_or_expired_token" });
+      return res.status(400).json({ error: "invalid_or_expired_token", requestId: res.locals.requestId });
     }
 
+    logAuthEvent(res, "password_reset_confirmed", "success", { email: payload.email, sessionsRevoked: true });
     return res.status(200).json({ success: true, email: payload.email, sessionsRevoked: true });
   } catch (error) {
     return next(error);
@@ -138,6 +152,7 @@ authEmailRouter.post("/email-verification/resend", async (req: Request, res: Res
     const slot = verificationResendCooldown.tryAcquire(email);
     if (!slot.ok) {
       const retryAfterSeconds = Math.ceil(slot.retryAfterMs / 1000);
+      logAuthEvent(res, "email_verification_resent", "failure", { email, reason: "RESEND_COOLDOWN" });
       res.setHeader("Retry-After", String(retryAfterSeconds));
       return res.status(429).json({
         error: "resend_cooldown",
@@ -155,16 +170,29 @@ authEmailRouter.post("/email-verification/resend", async (req: Request, res: Res
     });
 
     if (user && !user.emailVerifiedAt) {
-      const token = signEmailFlowToken(email, "email_verification");
+      // Issue first, then make it the only live token for this address
+      // (#1444). A previous link stops working the moment the upsert commits,
+      // even if this request's email never arrives.
+      const issued = issueEmailVerificationToken(email);
+      await rotateEmailVerificationToken(email, issued);
+
       const base =
         body.verifyUrlBase ?? process.env.EMAIL_VERIFICATION_URL_BASE ?? "https://app.splitnaira.com/verify-email";
-      await getEmailProvider().sendVerificationEmail({
-        to: email,
-        token,
-        verifyUrl: `${base}?token=${encodeURIComponent(token)}`,
-      });
+      try {
+        await getEmailProvider().sendVerificationEmail({
+          to: email,
+          token: issued.token,
+          verifyUrl: `${base}?token=${encodeURIComponent(issued.token)}`,
+        });
+      } catch (error) {
+        // Leave no live token behind that nobody received. Best-effort: the
+        // original send error is the one the caller needs to see.
+        await invalidateEmailVerificationToken(email, issued.tokenHash).catch(() => undefined);
+        throw error;
+      }
     }
 
+    logAuthEvent(res, "email_verification_resent", "success", { userId: user?.id, email });
     return res.status(202).json({
       success: true,
       retryAfterSeconds: Math.ceil(verificationResendCooldown.cooldownMs / 1000),
@@ -177,12 +205,30 @@ authEmailRouter.post("/email-verification/resend", async (req: Request, res: Res
   }
 });
 
-/** Marks every account registered with the token's email as verified (#1443). */
+/**
+ * Marks every account registered with the token's email as verified (#1443).
+ *
+ * The token is consumed before the account is marked verified (#1444): the
+ * conditional update is what makes a replay, a superseded link, and one of two
+ * concurrent confirms fail closed. A confirmation always applies to the email
+ * inside the signed token, never to a value from the request body, so a token
+ * issued for one address cannot verify another.
+ */
 authEmailRouter.post("/email-verification/confirm", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { token } = emailVerificationConfirmSchema.parse(req.body);
     const payload = verifyEmailFlowToken(token, "email_verification");
     if (!payload) {
+      logAuthEvent(res, "email_verified", "failure", { reason: "invalid_or_expired_token" });
+      return res.status(400).json({ error: "invalid_or_expired_token", requestId: res.locals.requestId });
+    }
+
+    const consumed = await consumeEmailVerificationToken(
+      payload.email,
+      hashEmailVerificationToken(token),
+    );
+    if (!consumed) {
+      // Reused, superseded, expired, or never issued.
       return res.status(400).json({ error: "invalid_or_expired_token" });
     }
 
@@ -190,6 +236,7 @@ authEmailRouter.post("/email-verification/confirm", async (req: Request, res: Re
       .getRepository(User)
       .update({ email: payload.email, emailVerifiedAt: IsNull() }, { emailVerifiedAt: new Date() });
 
+    logAuthEvent(res, "email_verified", "success", { email: payload.email });
     return res.status(200).json({ success: true, email: payload.email });
   } catch (error) {
     return next(error);

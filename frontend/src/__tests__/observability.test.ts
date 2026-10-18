@@ -4,6 +4,8 @@ import { ApiClient } from "../lib/api-client";
 import { submitSorobanTransactionAndPoll } from "../lib/soroban-transaction";
 import { rpc } from "@stellar/stellar-sdk";
 
+const TEST_TX_HASH = "ab".repeat(32);
+
 vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
   init: vi.fn(),
@@ -100,7 +102,8 @@ describe("Frontend Observability - Sentry & Retry Integrations", () => {
     const mockServer = {
       sendTransaction: vi.fn().mockResolvedValue({
         status: "PENDING",
-        hash: "test_tx_hash",
+        // Soroban RPC hashes are 64-char hex; send responses are validated (#1494).
+        hash: TEST_TX_HASH,
       }),
       pollTransaction: vi.fn().mockResolvedValue({
         status: "FAILED",
@@ -123,7 +126,7 @@ describe("Frontend Observability - Sentry & Retry Integrations", () => {
           status: "FAILED",
         },
         extra: expect.objectContaining({
-          txHash: "test_tx_hash",
+          txHash: TEST_TX_HASH,
         }),
       })
     );
