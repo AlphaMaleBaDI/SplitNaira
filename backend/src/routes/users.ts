@@ -11,6 +11,7 @@ import { AppError, ErrorCode, ErrorType } from "../lib/errors.js";
 import { logger } from "../services/logger.js";
 import { signToken } from "../services/jwt.js";
 import { authJwtMiddleware } from "../middleware/auth-jwt.js";
+import { logAuthEvent } from "../services/auth-events.js";
 import { loginAttemptStore } from "../services/login-attempts.js";
 
 export const usersRouter = Router();
@@ -112,6 +113,7 @@ usersRouter.post("/login", async (req: Request, res: Response, next: NextFunctio
       userId: user.id,
       walletAddress: user.walletAddress,
     });
+    logAuthEvent(res, "login", "success", { userId: user.id });
 
     return res.status(200).json({
       id: user.id,
@@ -182,7 +184,22 @@ usersRouter.patch("/me", authJwtMiddleware, async (req: Request, res: Response, 
         throw new AppError(ErrorType.RPC, ErrorCode.NOT_FOUND, "User not found.");
       }
 
-      if (updates.email !== undefined) user.email = updates.email;
+      // Changing the address needs confirmation from the new one (#1448).
+      // Writing it here would bypass that, so only a no-op "change" is accepted.
+      if (
+        updates.email !== undefined &&
+        updates.email.trim().toLowerCase() !== (user.email ?? "").trim().toLowerCase()
+      ) {
+        throw new AppError(
+          ErrorType.VALIDATION,
+          ErrorCode.VALIDATION_ERROR,
+          "Email can't be changed through this endpoint. Request a confirmed change instead.",
+          {
+            message: "A confirmation link is sent to the new address before the change takes effect.",
+            action: "POST /auth/email-change/request",
+          }
+        );
+      }
       if (updates.alias !== undefined) user.alias = updates.alias;
 
       return await userRepository.save(user);

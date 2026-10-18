@@ -323,7 +323,7 @@ describe("User Registration API", () => {
       saveMock.mockResolvedValue({
         id: "22222222-2222-4222-8222-222222222222",
         walletAddress,
-        email: "new@example.com",
+        email: "old@example.com",
         alias: "NewAlias",
         role: "customer",
         isActive: true,
@@ -338,12 +338,14 @@ describe("User Registration API", () => {
         .patch("/users/me")
         .set("Authorization", `Bearer ${token}`)
         .send({
-          email: "new@example.com",
+          // Resending the current address is a no-op; changing it needs the
+          // confirmation workflow (#1448), covered in email-change.test.ts.
+          email: "old@example.com",
           alias: "NewAlias"
         });
 
       expect(response.status).toBe(200);
-      expect(response.body.email).toBe("new@example.com");
+      expect(response.body.email).toBe("old@example.com");
       expect(response.body.alias).toBe("NewAlias");
       expect(response.body.createdAt).toBe(createdAt.toISOString());
       expect(response.body.updatedAt).toBe(updatedAtAfter.toISOString());
