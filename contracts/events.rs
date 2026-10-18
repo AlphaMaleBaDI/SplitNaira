@@ -35,48 +35,6 @@ impl ProjectCreated {
     }
 }
 
-
-/// Returns a Vec of two collaborators splitting 50/50.
-fn two_collabs(env: &Env) -> Vec<Collaborator> {
-    let a = Address::generate(env);
-    let b = Address::generate(env);
-    vec![
-        env,
-        Collaborator {
-            address: a,
-            alias: String::from_str(env, "A"),
-            basis_points: 5000,
-        },
-        Collaborator {
-            address: b,
-            alias: String::from_str(env, "B"),
-            basis_points: 5000,
-        },
-    ]
-}
-
-/// Creates a project with a registered token and returns (client, owner, token).
-fn setup_project<'a>(
-    env: &'a Env,
-    project_id: &'a Symbol,
-) -> (SplitNairaContractClient<'a>, Address, Address) {
-    let (client, _) = make_client(env);
-    let token_admin = Address::generate(env);
-    let token = env.register_stellar_asset_contract(token_admin);
-    let owner = Address::generate(env);
-    let collabs = two_collabs(env);
-
-    client.create_project(
-        &owner,
-        project_id,
-        &String::from_str(env, "Test Project"),
-        &String::from_str(env, "music"),
-        &token,
-        &collabs,
-    );
-    (client, owner, token)
-}
-
 impl Publishable for ProjectCreated {
     fn publish(&self, env: &Env) {
         env.events().publish(
@@ -104,48 +62,6 @@ impl ProjectLocked {
     pub fn new(project_id: Symbol) -> Self {
         Self { project_id }
     }
-}
-
-
-/// Returns a Vec of two collaborators splitting 50/50.
-fn two_collabs(env: &Env) -> Vec<Collaborator> {
-    let a = Address::generate(env);
-    let b = Address::generate(env);
-    vec![
-        env,
-        Collaborator {
-            address: a,
-            alias: String::from_str(env, "A"),
-            basis_points: 5000,
-        },
-        Collaborator {
-            address: b,
-            alias: String::from_str(env, "B"),
-            basis_points: 5000,
-        },
-    ]
-}
-
-/// Creates a project with a registered token and returns (client, owner, token).
-fn setup_project<'a>(
-    env: &'a Env,
-    project_id: &'a Symbol,
-) -> (SplitNairaContractClient<'a>, Address, Address) {
-    let (client, _) = make_client(env);
-    let token_admin = Address::generate(env);
-    let token = env.register_stellar_asset_contract(token_admin);
-    let owner = Address::generate(env);
-    let collabs = two_collabs(env);
-
-    client.create_project(
-        &owner,
-        project_id,
-        &String::from_str(env, "Test Project"),
-        &String::from_str(env, "music"),
-        &token,
-        &collabs,
-    );
-    (client, owner, token)
 }
 
 impl Publishable for ProjectLocked {
@@ -179,7 +95,11 @@ impl PaymentSent {
     #[must_use]
     pub fn new(project_id: Symbol, recipient: Address, amount: i128) -> Self {
         debug_assert!(amount > 0, "PaymentSent: amount must be positive");
-        Self { project_id, recipient, amount }
+        Self {
+            project_id,
+            recipient,
+            amount,
+        }
     }
 }
 
@@ -215,8 +135,15 @@ impl DistributionComplete {
     #[must_use]
     pub fn new(project_id: Symbol, round: u32, total: i128) -> Self {
         debug_assert!(round > 0, "DistributionComplete: round is 1-based");
-        debug_assert!(total >= 0, "DistributionComplete: total must be non-negative");
-        Self { project_id, round, total }
+        debug_assert!(
+            total >= 0,
+            "DistributionComplete: total must be non-negative"
+        );
+        Self {
+            project_id,
+            round,
+            total,
+        }
     }
 }
 
@@ -254,18 +181,18 @@ impl DepositReceived {
     /// # Panics
     /// Panics in debug builds if `amount` ≤ 0 or `project_balance` < 0.
     #[must_use]
-    pub fn new(
-        project_id: Symbol,
-        from: Address,
-        amount: i128,
-        project_balance: i128,
-    ) -> Self {
+    pub fn new(project_id: Symbol, from: Address, amount: i128, project_balance: i128) -> Self {
         debug_assert!(amount > 0, "DepositReceived: amount must be positive");
         debug_assert!(
             project_balance >= 0,
             "DepositReceived: project_balance must be non-negative"
         );
-        Self { project_id, from, amount, project_balance }
+        Self {
+            project_id,
+            from,
+            amount,
+            project_balance,
+        }
     }
 }
 
@@ -348,7 +275,13 @@ impl UnallocatedWithdrawn {
             remaining_unallocated >= 0,
             "UnallocatedWithdrawn: remaining_unallocated must be non-negative"
         );
-        Self { token, admin, to, amount, remaining_unallocated }
+        Self {
+            token,
+            admin,
+            to,
+            amount,
+            remaining_unallocated,
+        }
     }
 }
 
@@ -387,7 +320,11 @@ pub struct OwnershipTransferred {
 impl OwnershipTransferred {
     #[must_use]
     pub fn new(project_id: Symbol, previous_owner: Address, new_owner: Address) -> Self {
-        Self { project_id, previous_owner, new_owner }
+        Self {
+            project_id,
+            previous_owner,
+            new_owner,
+        }
     }
 }
 
@@ -525,7 +462,12 @@ impl CollaboratorClaimed {
             distribution_round > 0,
             "CollaboratorClaimed: distribution_round is 1-based"
         );
-        Self { project_id, claimer, amount, distribution_round }
+        Self {
+            project_id,
+            claimer,
+            amount,
+            distribution_round,
+        }
     }
 }
 
@@ -571,7 +513,10 @@ impl SplitsUpdatedWithPendingBalance {
             pending_balance > 0,
             "SplitsUpdatedWithPendingBalance: pending_balance must be positive"
         );
-        Self { project_id, pending_balance }
+        Self {
+            project_id,
+            pending_balance,
+        }
     }
 }
 
@@ -655,7 +600,10 @@ pub struct AccountingDiscrepancy {
 impl AccountingDiscrepancy {
     pub fn publish(&self, env: &Env) {
         env.events().publish(
-            (Symbol::new(env, "accounting_discrepancy"), self.token.clone()),
+            (
+                Symbol::new(env, "accounting_discrepancy"),
+                self.token.clone(),
+            ),
             (self.contract_balance, self.accounted_balance),
         );
     }
@@ -678,87 +626,296 @@ pub struct MaxCollaboratorsUpdated {
 impl Publishable for MaxCollaboratorsUpdated {
     fn publish(&self, env: &Env) {
         env.events().publish(
-            (Symbol::new(env, "max_collaborators_set"), self.admin.clone()),
+            (
+                Symbol::new(env, "max_collaborators_set"),
+                self.admin.clone(),
+            ),
             self.value,
         );
     }
 }
 
-
 #[cfg(test)]
 mod event_snapshot_tests {
-    use super::*;
+    //! Event schema snapshot tests (see docs/event_schema_snapshot_tests.md
+    //! and docs/contract-events.md).
+    //!
+    //! Each test drives the real contract path that emits an event, then
+    //! asserts the published topic/data schema so indexers can rely on it.
+
+    use crate::{Collaborator, SplitNairaContract, SplitNairaContractClient};
     use soroban_sdk::{
-        symbol_short, testutils::Events, Env, IntoVal,
+        testutils::{Address as _, Events},
+        token, vec, Address, Env, FromVal, String, Symbol, TryFromVal, Val, Vec,
     };
+
+    /// Decodes an event's tuple/list payload into its `Val` components.
+    fn data_parts(env: &Env, data: &Val) -> Vec<Val> {
+        Vec::<Val>::try_from_val(env, data).expect("event data must be a val list")
+    }
+
+    /// A registered contract with one freshly created project.
+    struct Fixture<'a> {
+        env: &'a Env,
+        client: SplitNairaContractClient<'a>,
+        contract_id: Address,
+        token: Address,
+        owner: Address,
+        project_id: Symbol,
+    }
+
+    fn fixture<'a>(env: &'a Env, name: &str) -> Fixture<'a> {
+        env.mock_all_auths();
+
+        let token_admin = Address::generate(env);
+        let token = env.register_stellar_asset_contract(token_admin);
+
+        let contract_id = env.register_contract(None, SplitNairaContract);
+        let client = SplitNairaContractClient::new(env, &contract_id);
+
+        let owner = Address::generate(env);
+        let alice = Address::generate(env);
+        let bob = Address::generate(env);
+        let collabs: Vec<Collaborator> = vec![
+            env,
+            Collaborator {
+                address: alice,
+                alias: String::from_str(env, "A"),
+                basis_points: 6000,
+            },
+            Collaborator {
+                address: bob,
+                alias: String::from_str(env, "B"),
+                basis_points: 4000,
+            },
+        ];
+
+        let project_id = Symbol::new(env, name);
+        client.create_project(
+            &owner,
+            &project_id,
+            &String::from_str(env, "Snapshot Project"),
+            &String::from_str(env, "music"),
+            &token,
+            &collabs,
+        );
+
+        Fixture {
+            env,
+            client,
+            contract_id,
+            token,
+            owner,
+            project_id,
+        }
+    }
+
+    /// Returns `(topics, data)` of the last event this contract published
+    /// under `name`, or `None` when the event was not published.
+    fn contract_event(f: &Fixture<'_>, name: &str) -> Option<(Vec<Val>, Val)> {
+        let mut matched: Option<(Vec<Val>, Val)> = None;
+        for event in f.env.events().all().iter() {
+            if &event.0 != &f.contract_id {
+                continue;
+            }
+            let topic0 = event
+                .1
+                .get(0)
+                .unwrap_or_else(|| panic!("event has no topic[0]"));
+            if Symbol::from_val(f.env, &topic0) == Symbol::new(f.env, name) {
+                matched = Some((event.1, event.2));
+            }
+        }
+        matched
+    }
 
     #[test]
     fn test_project_creation_event_schema() {
         let env = Env::default();
-        // Initialize contract client and trigger creation
-        // ... (use setup helpers from lib.rs / tests.rs)
+        let f = fixture(&env, "snapshot_create");
 
-        let events = env.events().all();
-        let last_event = events.last().expect("Project creation event expected");
+        let (topics, data) =
+            contract_event(&f, "project_created").expect("project_created event expected");
 
-        // Assert Topic Order & Symbols
-        let topics = last_event.1;
-        assert_eq!(topics.len(), 2, "Project creation must have 2 topics");
-        assert_eq!(topics.get_unchecked(0), symbol_short!("project").into_val(&env));
-        assert_eq!(topics.get_unchecked(1), symbol_short!("created").into_val(&env));
-
-        // Assert Payload Semantics
-        let data_str = format!("{:?}", last_event.2);
-        assert!(data_str.contains("project_id"), "Payload missing project_id field");
-        assert!(data_str.contains("owner"), "Payload missing owner field");
+        assert_eq!(topics.len(), 2, "project_created must have 2 topics");
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(1).unwrap()),
+            f.project_id
+        );
+        let expected_owner =
+            Address::try_from_val(&env, &data).expect("data must decode to an address");
+        assert_eq!(expected_owner, f.owner, "data must be the owner address");
     }
 
     #[test]
     fn test_deposit_event_schema() {
         let env = Env::default();
-        // Trigger deposit action
+        let f = fixture(&env, "snapshot_deposit");
 
-        let events = env.events().all();
-        let deposit_event = events.last().expect("Deposit event expected");
+        let amount = 10_000_000_i128;
+        token::StellarAssetClient::new(&env, &f.token).mint(&f.owner, &amount);
+        f.client.deposit(&f.project_id, &f.owner, &amount);
 
-        let topics = deposit_event.1;
-        assert_eq!(topics.get_unchecked(0), symbol_short!("deposit").into_val(&env));
+        let (topics, data) =
+            contract_event(&f, "deposit_received").expect("deposit_received event expected");
 
-        let data_str = format!("{:?}", deposit_event.2);
-        assert!(data_str.contains("amount"), "Payload missing deposit amount");
+        assert_eq!(topics.len(), 2, "deposit_received must have 2 topics");
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(1).unwrap()),
+            f.project_id
+        );
+        // data = (from, amount_in_stroops, project_balance_in_stroops)
+        let parts = data_parts(&env, &data);
+        assert_eq!(parts.len(), 3, "data must be a 3-element list");
+        assert_eq!(
+            Address::try_from_val(&env, &parts.get(0).unwrap()).unwrap(),
+            f.owner,
+            "data[0] must be the depositor"
+        );
+        assert_eq!(
+            i128::try_from_val(&env, &parts.get(1).unwrap()).unwrap(),
+            amount
+        );
+        assert_eq!(
+            i128::try_from_val(&env, &parts.get(2).unwrap()).unwrap(),
+            amount,
+            "data[2] must be the post-deposit balance"
+        );
     }
 
     #[test]
     fn test_distribution_event_schema() {
         let env = Env::default();
+        let f = fixture(&env, "snapshot_distribute");
 
-        let events = env.events().all();
-        let dist_event = events.last().expect("Distribution event expected");
+        let amount = 10_000_000_i128;
+        token::StellarAssetClient::new(&env, &f.token).mint(&f.owner, &amount);
+        f.client.deposit(&f.project_id, &f.owner, &amount);
+        f.client.distribute(&f.project_id);
 
-        let topics = dist_event.1;
-        assert_eq!(topics.get_unchecked(0), symbol_short!("distrib").into_val(&env));
+        let (topics, data) = contract_event(&f, "distribution_complete")
+            .expect("distribution_complete event expected");
+
+        assert_eq!(topics.len(), 2, "distribution_complete must have 2 topics");
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(1).unwrap()),
+            f.project_id
+        );
+        // data = (round_number, total_distributed_in_stroops)
+        let parts = data_parts(&env, &data);
+        assert_eq!(parts.len(), 2, "data must be a 2-element list");
+        assert_eq!(
+            u32::try_from_val(&env, &parts.get(0).unwrap()).unwrap(),
+            1,
+            "first distribution round"
+        );
+        assert_eq!(
+            i128::try_from_val(&env, &parts.get(1).unwrap()).unwrap(),
+            amount,
+            "total distributed in this round"
+        );
+
+        // One payment_sent event per positive payout (60/40 split).
+        let mut payment_count = 0u32;
+        for event in f.env.events().all().iter() {
+            if &event.0 != &f.contract_id {
+                continue;
+            }
+            let topic0 = event.1.get(0).unwrap();
+            if Symbol::from_val(&env, &topic0) == Symbol::new(&env, "payment_sent") {
+                payment_count += 1;
+            }
+        }
+        assert_eq!(payment_count, 2, "one payment_sent event per collaborator");
     }
 
     #[test]
     fn test_collaborator_update_event_schema() {
         let env = Env::default();
+        let f = fixture(&env, "snapshot_update");
 
-        let events = env.events().all();
-        let update_event = events.last().expect("Collaborator update event expected");
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+        let updated: Vec<Collaborator> = vec![
+            &env,
+            Collaborator {
+                address: alice,
+                alias: String::from_str(&env, "Alice"),
+                basis_points: 7000,
+            },
+            Collaborator {
+                address: bob,
+                alias: String::from_str(&env, "Bob"),
+                basis_points: 3000,
+            },
+        ];
+        f.client
+            .update_collaborators(&f.project_id, &f.owner, &updated);
 
-        let topics = update_event.1;
-        assert_eq!(topics.get_unchecked(0), symbol_short!("collab").into_val(&env));
-        assert_eq!(topics.get_unchecked(1), symbol_short!("updated").into_val(&env));
+        let (topics, data) = contract_event(&f, "collaborators_updated")
+            .expect("collaborators_updated event expected");
+
+        assert_eq!(topics.len(), 2, "collaborators_updated must have 2 topics");
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(1).unwrap()),
+            f.project_id
+        );
+        let expected_topic = Symbol::from_val(&env, &data);
+        assert_eq!(expected_topic, f.project_id, "data must be the project_id");
+
+        // An unfunded project must not emit the pending-balance warning.
+        assert!(
+            contract_event(&f, "splits_updated_pending_balance").is_none(),
+            "no pending-balance warning when balance is zero"
+        );
     }
 
     #[test]
-    fn test_warning_event_schema() {
+    fn test_pending_balance_warning_event_schema() {
+        // Formerly `test_warning_event_schema`: the schema's warning for
+        // indexers is `SplitsUpdatedWithPendingBalance`, published whenever
+        // splits change while the project still holds an undistributed balance.
         let env = Env::default();
+        let f = fixture(&env, "snapshot_warning");
 
-        let events = env.events().all();
-        let warn_event = events.last().expect("Warning event expected");
+        let amount = 5_000_000_i128;
+        token::StellarAssetClient::new(&env, &f.token).mint(&f.owner, &amount);
+        f.client.deposit(&f.project_id, &f.owner, &amount);
 
-        let topics = warn_event.1;
-        assert_eq!(topics.get_unchecked(0), symbol_short!("warning").into_val(&env));
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+        let updated: Vec<Collaborator> = vec![
+            &env,
+            Collaborator {
+                address: alice,
+                alias: String::from_str(&env, "Alice"),
+                basis_points: 5000,
+            },
+            Collaborator {
+                address: bob,
+                alias: String::from_str(&env, "Bob"),
+                basis_points: 5000,
+            },
+        ];
+        f.client
+            .update_collaborators(&f.project_id, &f.owner, &updated);
+
+        let (topics, data) = contract_event(&f, "splits_updated_pending_balance")
+            .expect("pending-balance warning event expected");
+
+        assert_eq!(
+            topics.len(),
+            2,
+            "splits_updated_pending_balance must have 2 topics"
+        );
+        assert_eq!(
+            Symbol::from_val(&env, &topics.get(1).unwrap()),
+            f.project_id
+        );
+        assert_eq!(
+            i128::try_from_val(&env, &data),
+            Ok(amount),
+            "data must be the pending balance"
+        );
     }
 }

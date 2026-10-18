@@ -1,4 +1,4 @@
-﻿#![cfg(test)]
+#![cfg(test)]
 
 //! Issue #838 — Contract storage TTL renewal integration tests.
 //!
@@ -17,21 +17,11 @@
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    token,
-    vec,
-    Address,
-    Env,
-    String,
-    Symbol,
-    Vec,
+    token, vec, Address, Env, String, Symbol, Vec,
 };
 
 use crate::{
-    errors::SplitError,
-    Collaborator,
-    DataKey,
-    SplitNairaContract,
-    SplitNairaContractClient,
+    errors::SplitError, Collaborator, DataKey, SplitNairaContract, SplitNairaContractClient,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -39,9 +29,7 @@ use crate::{
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Creates a fresh test environment with mocked authorization and a test token.
-fn setup_env_with_token<'a>(
-    env: &'a Env,
-) -> (SplitNairaContractClient<'a>, Address) {
+fn setup_env_with_token<'a>(env: &'a Env) -> (SplitNairaContractClient<'a>, Address) {
     env.mock_all_auths();
 
     let token_admin = Address::generate(env);
@@ -54,9 +42,7 @@ fn setup_env_with_token<'a>(
 }
 
 /// Creates two collaborators with a 50/50 split.
-fn two_collaborators(
-    env: &Env,
-) -> (Address, Address, Vec<Collaborator>) {
+fn two_collaborators(env: &Env) -> (Address, Address, Vec<Collaborator>) {
     let alice = Address::generate(env);
     let bob = Address::generate(env);
 
@@ -103,14 +89,8 @@ fn create_project(
 ///
 /// The check runs inside the contract context because persistent storage
 /// access requires the contract address to be active.
-fn has_persistent(
-    env: &Env,
-    contract_id: &Address,
-    key: &DataKey,
-) -> bool {
-    env.as_contract(contract_id, || {
-        env.storage().persistent().has(key)
-    })
+fn has_persistent(env: &Env, contract_id: &Address, key: &DataKey) -> bool {
+    env.as_contract(contract_id, || env.storage().persistent().has(key))
 }
 
 /// Advances the ledger by the supplied number of ledgers.
@@ -134,38 +114,34 @@ fn test_refresh_project_storage_keeps_project_alive() {
     let (_, _, collaborators) = two_collaborators(&env);
     let project_id = Symbol::new(&env, "ttl_refresh");
 
-    create_project(
-        &env,
-        &client,
-        &token,
-        &project_id,
-        &collaborators,
-    );
+    create_project(&env, &client, &token, &project_id, &collaborators);
 
-    let contract_id = env.current_contract_address();
+    let contract_id = client.address.clone();
 
-    advance_ledger(&env, 200_000);
+    // Advance within the renewed TTL window (`PROJECT_TTL_BUMP_LEDGERS` =
+    // 100_000 ledgers ≈ 5.8 days). An advance past the window expires the
+    // entries by design and the host rejects access to them.
+    advance_ledger(&env, 90_000);
 
-    // The test host does not perform automatic eviction, but the key should
-    // still exist before the refresh.
     assert!(has_persistent(
         &env,
         &contract_id,
         &DataKey::Project(project_id.clone())
     ));
 
-    // Permissionless refresh should renew the project's storage.
+    // Permissionless refresh should renew the project's storage for another
+    // full TTL window.
     client.refresh_project_storage(&project_id);
+
+    advance_ledger(&env, 90_000);
 
     let project = client
         .get_project(&project_id)
-        .expect("project should remain readable after refresh");
+        .expect("project should remain readable after refresh + advance");
 
     assert_eq!(project.project_id, project_id);
 
-    let balance = client
-        .get_balance(&project_id)
-        .expect("balance should remain readable after refresh");
+    let balance = client.get_balance(&project_id);
 
     assert_eq!(balance, 0);
 
@@ -208,13 +184,7 @@ fn test_get_project_remains_readable_after_ledger_advance() {
     let (_, _, collaborators) = two_collaborators(&env);
     let project_id = Symbol::new(&env, "ttl_project_read");
 
-    create_project(
-        &env,
-        &client,
-        &token,
-        &project_id,
-        &collaborators,
-    );
+    create_project(&env, &client, &token, &project_id, &collaborators);
 
     // Initial read exercises the normal read/bump path.
     let initial_project = client
@@ -223,7 +193,8 @@ fn test_get_project_remains_readable_after_ledger_advance() {
 
     assert_eq!(initial_project.project_id, project_id);
 
-    advance_ledger(&env, 120_000);
+    // Within the renewed TTL window (100_000 ledgers).
+    advance_ledger(&env, 90_000);
 
     let project = client
         .get_project(&project_id)
@@ -241,22 +212,14 @@ fn test_get_balance_remains_readable_after_ledger_advance() {
     let (_, _, collaborators) = two_collaborators(&env);
     let project_id = Symbol::new(&env, "ttl_balance_read");
 
-    create_project(
-        &env,
-        &client,
-        &token,
-        &project_id,
-        &collaborators,
-    );
+    create_project(&env, &client, &token, &project_id, &collaborators);
 
-    assert_eq!(client.get_balance(&project_id), Ok(0));
+    assert_eq!(client.get_balance(&project_id), 0);
 
-    advance_ledger(&env, 120_000);
+    // Within the renewed TTL window (100_000 ledgers).
+    advance_ledger(&env, 90_000);
 
-    assert_eq!(
-        client.get_balance(&project_id),
-        Ok(0)
-    );
+    assert_eq!(client.get_balance(&project_id), 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -273,13 +236,7 @@ fn test_deposit_and_distribute_keep_project_storage_alive() {
     let (alice, _, collaborators) = two_collaborators(&env);
     let project_id = Symbol::new(&env, "ttl_distribution");
 
-    create_project(
-        &env,
-        &client,
-        &token,
-        &project_id,
-        &collaborators,
-    );
+    create_project(&env, &client, &token, &project_id, &collaborators);
 
     let funder = Address::generate(&env);
     let stellar_token = token::StellarAssetClient::new(&env, &token);
@@ -288,26 +245,20 @@ fn test_deposit_and_distribute_keep_project_storage_alive() {
 
     stellar_token.mint(&funder, &amount);
 
-    client.deposit(
-        &project_id,
-        &funder,
-        &amount,
-    );
+    client.deposit(&project_id, &funder, &amount);
 
-    assert_eq!(
-        client.get_balance(&project_id),
-        Ok(amount)
-    );
+    assert_eq!(client.get_balance(&project_id), amount);
 
     client.distribute(&project_id);
 
     // Alice owns 50% of the project.
-    assert_eq!(
-        client.get_claimed(&project_id, &alice),
-        Ok(1_000_0000000_i128)
-    );
+    assert_eq!(client.get_claimed(&project_id, &alice), 1_000_0000000_i128);
 
-    advance_ledger(&env, 150_000);
+    // Advance well within the renewed TTL window (`PROJECT_TTL_BUMP_LEDGERS`
+    // = 100_000 ledgers ≈ 5.8 days): deposit/distribute must have renewed the
+    // project storage, so it stays readable after a substantial advance. An
+    // advance past the renewed window expires the entries by design.
+    advance_ledger(&env, 90_000);
 
     // Core project data should still be readable.
     let project = client
@@ -316,14 +267,9 @@ fn test_deposit_and_distribute_keep_project_storage_alive() {
 
     assert_eq!(project.project_id, project_id);
 
-    let claimable = client
-        .get_claimable(&project_id, &alice)
-        .expect("claimable data should remain readable");
+    let claimable = client.get_claimable(&project_id, &alice);
 
-    assert_eq!(
-        claimable.claimed,
-        1_000_0000000_i128
-    );
+    assert_eq!(claimable.claimed, 1_000_0000000_i128);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -340,13 +286,7 @@ fn test_claim_renews_collaborator_storage() {
     let (alice, _, collaborators) = two_collaborators(&env);
     let project_id = Symbol::new(&env, "ttl_claim");
 
-    create_project(
-        &env,
-        &client,
-        &token,
-        &project_id,
-        &collaborators,
-    );
+    create_project(&env, &client, &token, &project_id, &collaborators);
 
     let funder = Address::generate(&env);
     let stellar_token = token::StellarAssetClient::new(&env, &token);
@@ -355,21 +295,20 @@ fn test_claim_renews_collaborator_storage() {
 
     stellar_token.mint(&funder, &amount);
 
-    client.deposit(
-        &project_id,
-        &funder,
-        &amount,
-    );
+    client.deposit(&project_id, &funder, &amount);
 
-    client.distribute(&project_id);
-
-    let claimed_amount = client
-        .claim(&project_id, &alice)
-        .expect("claim should succeed");
+    // Claim first: `claim` records `Claimed` + `LastClaimAmount` for the
+    // collaborator. (Claiming *after* a full push distribution would return
+    // 0 — the pool is empty until the next deposit re-opens the epoch.)
+    let claimed_amount = client.claim(&project_id, &alice);
 
     assert!(claimed_amount > 0);
 
-    let contract_id = env.current_contract_address();
+    // Settle the remainder; push payouts update `claimed` but never
+    // `last_claim_amount`.
+    client.distribute(&project_id);
+
+    let contract_id = client.address.clone();
 
     advance_ledger(&env, 90_000);
 
@@ -377,31 +316,20 @@ fn test_claim_renews_collaborator_storage() {
     assert!(has_persistent(
         &env,
         &contract_id,
-        &DataKey::Claimed(
-            project_id.clone(),
-            alice.clone()
-        )
+        &DataKey::Claimed(project_id.clone(), alice.clone())
     ));
 
     assert!(has_persistent(
         &env,
         &contract_id,
-        &DataKey::LastClaimAmount(
-            project_id.clone(),
-            alice.clone()
-        )
+        &DataKey::LastClaimAmount(project_id.clone(), alice.clone())
     ));
 
     // Verify the public read path still works.
-    let claimable = client
-        .get_claimable(&project_id, &alice)
-        .expect("claimable data should remain readable");
+    let claimable = client.get_claimable(&project_id, &alice);
 
     assert!(claimable.claimed > 0);
-    assert_eq!(
-        claimable.last_claim_amount,
-        claimed_amount
-    );
+    assert_eq!(claimable.last_claim_amount, claimed_amount);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -418,13 +346,7 @@ fn test_project_metadata_remains_consistent_after_ledger_advance() {
     let (_, _, collaborators) = two_collaborators(&env);
     let project_id = Symbol::new(&env, "ttl_metadata");
 
-    let owner = create_project(
-        &env,
-        &client,
-        &token,
-        &project_id,
-        &collaborators,
-    );
+    let owner = create_project(&env, &client, &token, &project_id, &collaborators);
 
     advance_ledger(&env, 75_000);
 
