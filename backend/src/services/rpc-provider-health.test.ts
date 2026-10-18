@@ -39,12 +39,16 @@ describe("RpcProviderHealthPolicy", () => {
   });
 
   it("resets the failure streak and quarantine after a successful response", () => {
+    let now = 100;
     const policy = new RpcProviderHealthPolicy([PRIMARY], {
       failureThreshold: 1,
       cooldownMs: 500,
+      now: () => now,
     });
     policy.recordFailure(PRIMARY);
-    expect(policy.next()).toBe(PRIMARY); // all providers quarantined: bounded probe
+    expect(() => policy.next()).toThrow("All Soroban RPC providers are temporarily unavailable");
+    now = 600;
+    expect(policy.next()).toBe(PRIMARY);
     policy.recordSuccess(PRIMARY);
     expect(policy.snapshot()[0]).toMatchObject({
       consecutiveFailures: 0,
