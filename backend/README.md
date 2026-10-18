@@ -72,6 +72,10 @@ The shared in-process read cache is limited to public Soroban contract reads: pa
 
 Preparing project mutation XDRs evicts affected project detail and list entries so the next request re-reads Soroban state. Because the client submits the XDR after receiving it, the TTL is also the backstop for submitted transactions and state changes made outside this API. Invalidated in-flight reads can complete for their original callers, but cannot repopulate the cache or replace a newer read.
 
+## Soroban RPC response validation
+
+Every Soroban RPC response is schema-validated before use (issue #1494). `getStellarRpcServer()` installs a JSON-RPC envelope and wire-schema check on the SDK's HTTP client, and call sites decode contract values (amounts as exact `bigint`, strict booleans and counts) with the schemas in `src/schemas/stellar-rpc.schemas.ts`. Malformed responses fail with `RpcResponseValidationError` (HTTP 502, `RPC_RESPONSE_INVALID`) and are never recorded as payments. Always obtain the server from `getStellarRpcServer()`. See [docs/stellar-rpc-response-validation.md](../docs/stellar-rpc-response-validation.md) before adding an RPC call.
+
 ## Notes
 
 - Dependencies are pinned to exact versions in `package.json` and `package-lock.json`.

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 import { app } from "../index.js";
-import { nativeToScVal } from "@stellar/stellar-sdk";
+import { Keypair, nativeToScVal } from "@stellar/stellar-sdk";
 
 // hoisted variables for mocks
 const { mockGetEvents, mockGetAccount } = vi.hoisted(() => ({
@@ -75,20 +75,22 @@ describe("Split History Precise Filtering", () => {
 
   it("should return sorted and formatted events", async () => {
     const projectId = "project123";
-    
+    // Payment events are validated (#1494): real recipient address, 64-char hex hashes.
+    const recipient = Keypair.random().publicKey();
+
     mockGetEvents
       .mockResolvedValueOnce({ // Round events
         events: [{
           value: nativeToScVal([1, 1000]),
-          txHash: "hash1",
+          txHash: "a1".repeat(32),
           ledgerClosedAt: "2024-03-29T10:00:00Z",
           id: "1"
         }]
       })
       .mockResolvedValueOnce({ // Payment events
         events: [{
-          value: nativeToScVal(["GABC", 500]),
-          txHash: "hash2",
+          value: nativeToScVal([recipient, 500]),
+          txHash: "b2".repeat(32),
           ledgerClosedAt: "2024-03-29T11:00:00Z",
           id: "2"
         }]
@@ -100,7 +102,7 @@ describe("Split History Precise Filtering", () => {
     expect(res.body.items).toHaveLength(2);
     expect(res.body.items[0].type).toBe("payment"); // Sorted by ledgerCloseTime desc
     expect(res.body.items[1].type).toBe("round");
-    expect(res.body.items[0].recipient).toBe("GABC");
+    expect(res.body.items[0].recipient).toBe(recipient);
     expect(res.body.items[1].round).toBe(1);
     expect(res.body.nextCursor).toBeNull();
   });

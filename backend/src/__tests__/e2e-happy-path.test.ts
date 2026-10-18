@@ -137,6 +137,15 @@ const COLLAB_A = "GCOLLAB0000000000000000000000000000000000000000000000001";
 const COLLAB_B = "GCOLLAB0000000000000000000000000000000000000000000000002";
 const PROJECT_ID = "e2e_happy_001";
 const DEPOSIT_AMOUNT = 10_000_000; // 1 XLM in stroops
+// Soroban RPC returns 64-char hex transaction hashes; history events are
+// validated against that format (Issue #1494).
+const TX_HASH = {
+  round1: "a1".repeat(32),
+  paymentA: "b2".repeat(32),
+  paymentB: "c3".repeat(32),
+  fullRound: "d4".repeat(32),
+  fullPaymentA: "e5".repeat(32),
+};
 
 const createPayload = {
   owner: OWNER,
@@ -283,7 +292,7 @@ describe("E2E happy path: create → deposit → distribute → history", () => 
         events: [
           {
             value: nativeToScVal([1, BigInt(DEPOSIT_AMOUNT)]),
-            txHash: "TXHASH_ROUND_1",
+            txHash: TX_HASH.round1,
             ledgerClosedAt: "2026-04-01T10:00:00Z",
             id: "round-event-1"
           }
@@ -294,13 +303,13 @@ describe("E2E happy path: create → deposit → distribute → history", () => 
         events: [
           {
             value: nativeToScVal([COLLAB_A, BigInt(6_000_000)]),
-            txHash: "TXHASH_PAYMENT_A",
+            txHash: TX_HASH.paymentA,
             ledgerClosedAt: "2026-04-01T10:00:01Z",
             id: "payment-event-a"
           },
           {
             value: nativeToScVal([COLLAB_B, BigInt(4_000_000)]),
-            txHash: "TXHASH_PAYMENT_B",
+            txHash: TX_HASH.paymentB,
             ledgerClosedAt: "2026-04-01T10:00:01Z",
             id: "payment-event-b"
           }
@@ -315,7 +324,7 @@ describe("E2E happy path: create → deposit → distribute → history", () => 
     const roundEvent = res.body.items.find((e: { type: string }) => e.type === "round");
     expect(roundEvent, "[history] distribution_complete event missing").toBeDefined();
     expect(roundEvent.round).toBe(1);
-    expect(roundEvent.txHash).toBe("TXHASH_ROUND_1");
+    expect(roundEvent.txHash).toBe(TX_HASH.round1);
 
     const paymentEvents = res.body.items.filter((e: { type: string }) => e.type === "payment");
     expect(paymentEvents, "[history] payment_sent events missing").toHaveLength(2);
@@ -378,7 +387,7 @@ describe("E2E happy path: create → deposit → distribute → history", () => 
         events: [
           {
             value: nativeToScVal([1, BigInt(DEPOSIT_AMOUNT)]),
-            txHash: "TXHASH_FULL_ROUND",
+            txHash: TX_HASH.fullRound,
             ledgerClosedAt: "2026-04-01T12:00:00Z",
             id: "full-round-1"
           }
@@ -388,7 +397,7 @@ describe("E2E happy path: create → deposit → distribute → history", () => 
         events: [
           {
             value: nativeToScVal([COLLAB_A, BigInt(6_000_000)]),
-            txHash: "TXHASH_FULL_PAY_A",
+            txHash: TX_HASH.fullPaymentA,
             ledgerClosedAt: "2026-04-01T12:00:01Z",
             id: "full-payment-a"
           }

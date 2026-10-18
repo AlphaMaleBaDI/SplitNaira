@@ -45,7 +45,11 @@ export enum ErrorCode {
 
   // Idempotency (Issue #888)
   IDEMPOTENCY_KEY_CONFLICT = "IDEMPOTENCY_KEY_CONFLICT",
-  IDEMPOTENCY_KEY_IN_PROGRESS = "IDEMPOTENCY_KEY_IN_PROGRESS"
+  IDEMPOTENCY_KEY_IN_PROGRESS = "IDEMPOTENCY_KEY_IN_PROGRESS",
+
+  // External Stellar RPC responses (Issue #1494)
+  RPC_RESPONSE_INVALID = "RPC_RESPONSE_INVALID",
+  RPC_UPSTREAM_ERROR = "RPC_UPSTREAM_ERROR"
 }
 
 export interface RemediationHint {
@@ -64,6 +68,57 @@ export class AppError extends Error {
   ) {
     super(message);
     this.name = "AppError";
+  }
+}
+
+/** One failed field in an external RPC response: where it is and what was wrong, never its value. */
+export interface RpcResponseIssue {
+  path: string;
+  message: string;
+}
+
+/**
+ * Issue #1494: a Soroban RPC response (or a contract value decoded from one)
+ * did not match the schema the backend relies on. The payload is never
+ * attached; only the RPC method and the failing field paths are kept, so the
+ * error is safe to log and to return to clients. Surfaces as HTTP 502.
+ */
+export class RpcResponseValidationError extends AppError {
+  readonly statusCode = 502;
+
+  constructor(
+    public readonly method: string,
+    public readonly issues: RpcResponseIssue[]
+  ) {
+    super(
+      ErrorType.RPC,
+      ErrorCode.RPC_RESPONSE_INVALID,
+      `Stellar RPC returned an invalid response for ${method}.`,
+      { message: "The blockchain node returned an unexpected response. Retry shortly.", action: "Retry Request" },
+      { method, fields: issues.map((issue) => issue.path) }
+    );
+    this.name = "RpcResponseValidationError";
+  }
+}
+
+/**
+ * Issue #1494: a well-formed JSON-RPC `error` object returned by Soroban RPC.
+ * The Stellar SDK throws these as plain objects; we convert them into a typed
+ * Error that keeps the upstream message and numeric JSON-RPC code.
+ */
+export class RpcJsonRpcError extends AppError {
+  readonly statusCode = 502;
+
+  constructor(
+    public readonly method: string,
+    public readonly rpcCode: number,
+    message: string
+  ) {
+    super(ErrorType.RPC, ErrorCode.RPC_UPSTREAM_ERROR, message, {
+      message: "The blockchain node rejected the request.",
+      action: "Retry Request"
+    }, { method, rpcCode });
+    this.name = "RpcJsonRpcError";
   }
 }
 
@@ -274,6 +329,13 @@ function translateRawSorobanError(rawError: string): AppError | null {
 }
 
 export function translateSorobanError(err: unknown): AppError {
+  // Already typed at the RPC boundary; re-translating would turn them into a
+  // generic 500. (Contract errors arrive in a simulation's `error` field, not
+  // as JSON-RPC errors, so nothing below applies to these.)
+  if (err instanceof RpcResponseValidationError || err instanceof RpcJsonRpcError) {
+    return err;
+  }
+
   const errorMessage = getErrorMessage(err);
 
   // 1. Handle HTTP/RPC connectivity issues
