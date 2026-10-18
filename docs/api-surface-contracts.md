@@ -86,6 +86,32 @@ checks the responses against the generated OpenAPI document:
 - the unknown-route and validation-error envelopes match the documented shape
   and never leak stack traces.
 
+The representative public JSON success responses are checked against the
+top-level fields declared in OpenAPI. Admin and ops responses additionally use
+`withResponseValidation` at runtime. Public routes are currently contract
+tested rather than wrapped with that runtime middleware; this avoids adding a
+second response check where a route already owns a typed contract and makes
+the documented contract the shared source of truth. When adding a public JSON
+route, add a representative success response check and cover its error or
+boundary behavior in the route tests. Keep the schema test strict about
+unexpected top-level fields; any intentional additive fields must be explained
+and listed in `KNOWN_ADDITIVE_FIELDS` in `api-contract.test.ts`.
+
+Single-payload JSON validation intentionally does not apply to `GET /events`,
+`GET /events/transactions/:txHash`, or `GET /metrics`: these stream SSE or
+Prometheus text over an open connection. Validate event payloads where they
+are produced and preserve the documented stream content type and framing.
+
+## HTTP method allowlist
+
+Express dispatches only the verbs registered for a route. An unsupported verb
+at an otherwise known resource falls through to the same static 404 contract
+as an unknown path. Tests exercise unsupported verbs on write resources and
+assert the handler does not run or reflect request data. `HEAD` is supported
+as Express's bodyless equivalent of `GET`; `OPTIONS` is handled by the global
+CORS middleware as a preflight response and is not a 404. Keep these framework
+exceptions explicit when adding or changing method tests.
+
 Run it with:
 
 ```bash

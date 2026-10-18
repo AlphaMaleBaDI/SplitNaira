@@ -64,7 +64,12 @@ Cross-cutting contracts enforced by tests. See
   [`../docs/rate-limiting-guidance.md`](../docs/rate-limiting-guidance.md).
 - **API contract tests** — `src/__tests__/api-contract.test.ts` runs the real
   app against the generated OpenAPI document and fails on undocumented response
-  fields or lost contracts.
+  fields or lost contracts. Public JSON responses are checked against their
+  documented fields; admin and ops responses also receive runtime Zod
+  validation. Streaming SSE and Prometheus endpoints are intentionally excluded
+  from single-response validation. Unsupported verbs return the standard 404,
+  with `HEAD` and CORS `OPTIONS` retaining their HTTP framework behavior. See
+  [`../docs/api-surface-contracts.md`](../docs/api-surface-contracts.md).
 
 ## Read caching
 
@@ -107,7 +112,8 @@ The backend includes comprehensive production-grade hardening:
 - **Input validation** — Zod schemas on all routes with consistent 400 error responses
 - **Error handling** — Centralized `AppError` mapping with user-friendly remediation hints
 - **Rate limiting** — Layered per-endpoint limits (global, read, write, admin)
-- **Response validation** — Middleware validates all JSON responses match schemas
+- **Response validation** — Runtime Zod validation covers admin and ops routes;
+  public JSON contracts are checked against OpenAPI in automated tests
 - **Security headers** — Helmet.js for CSP, HSTS, X-Frame-Options, etc.
 - **Payments admin hardening** — `/splits/admin/*` protected by `PAYMENTS_ADMIN_API_KEY`; writes toggleable via `PAYMENTS_ADMIN_WRITE_ENABLED`
 
