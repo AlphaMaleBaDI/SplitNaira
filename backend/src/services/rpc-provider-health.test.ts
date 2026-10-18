@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseRpcProviderUrls, RpcProviderHealthPolicy } from "./rpc-provider-health.js";
+import { installRpcProviderFailover, parseRpcProviderUrls, RpcProviderHealthPolicy } from "./rpc-provider-health.js";
 
 const PRIMARY = "https://rpc-a.example";
 const BACKUP = "https://rpc-b.example";
@@ -74,5 +74,55 @@ describe("RpcProviderHealthPolicy", () => {
     expect(() => policy.recordFailure("https://rpc-unknown.example")).toThrow(
       "Unknown Soroban RPC provider",
     );
+  });
+});
+
+
+describe("installRpcProviderFailover", () => {
+  type TestConfig = { baseURL?: string; __rpcProviderUrl?: string };
+  let requestHandler: ((config: TestConfig) => TestConfig) | undefined;
+  let rejectHandler: ((error: unknown) => unknown) | undefined;
+
+  function install(policy: RpcProviderHealthPolicy): void {
+    const fakeClient = {
+      interceptors: {
+        request: {
+          use: (fulfilled: (config: TestConfig) => TestConfig) => {
+            requestHandler = fulfilled;
+          },
+        },
+        response: {
+          use: (
+            _fulfilled: (response: { config: TestConfig }) => unknown,
+            rejected: (error: unknown) => unknown,
+          ) => {
+            rejectHandler = rejected;
+          },
+        },
+      },
+    };
+    installRpcProviderFailover(
+      { httpClient: fakeClient } as unknown as Parameters<typeof installRpcProviderFailover>[0],
+      policy,
+    );
+  }
+
+  it("quarantines a provider on a request timeout and routes the next request to backup", () => {
+    const policy = new RpcProviderHealthPolicy([PRIMARY, BACKUP]);
+    install(policy);
+
+    const config = requestHandler!({ baseURL: PRIMARY });
+    expect(config.baseURL).toBe(PRIMARY);
+    rejectHandler!({ code: "ECONNABORTED", config });
+    expect(requestHandler!({ baseURL: PRIMARY }).baseURL).toBe(BACKUP);
+  });
+
+  it("does not mark a provider unhealthy for a stale/schema-invalid response", () => {
+    const policy = new RpcProviderHealthPolicy([PRIMARY]);
+    install(policy);
+
+    requestHandler!({ baseURL: PRIMARY });
+    rejectHandler!(new Error("RPC response request ID did not match"));
+    expect(policy.next()).toBe(PRIMARY);
   });
 });
