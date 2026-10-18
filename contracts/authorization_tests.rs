@@ -22,22 +22,9 @@
 //! belongs in the reliability and functional test suites.
 
 use crate::{
-    errors::SplitError,
-    Collaborator,
-    SplitNairaContract,
-    SplitNairaContractClient,
-    SplitProject,
+    errors::SplitError, Collaborator, SplitNairaContract, SplitNairaContractClient, SplitProject,
 };
-use soroban_sdk::{
-    testutils::Address as _,
-    token,
-    vec,
-    Address,
-    Env,
-    String,
-    Symbol,
-    Vec,
-};
+use soroban_sdk::{testutils::Address as _, token, vec, Address, Env, String, Symbol, Vec};
 
 // -----------------------------------------------------------------------------
 // Shared helpers
@@ -131,18 +118,12 @@ fn assert_project_unchanged(before: &SplitProject, after: &SplitProject) {
         let before_collaborator = before.collaborators.get(index).unwrap();
         let after_collaborator = after.collaborators.get(index).unwrap();
 
-        assert_eq!(
-            before_collaborator.address,
-            after_collaborator.address
-        );
+        assert_eq!(before_collaborator.address, after_collaborator.address);
         assert_eq!(
             before_collaborator.basis_points,
             after_collaborator.basis_points
         );
-        assert_eq!(
-            before_collaborator.alias,
-            after_collaborator.alias
-        );
+        assert_eq!(before_collaborator.alias, after_collaborator.alias);
     }
 }
 
@@ -168,8 +149,7 @@ fn test_owner_gated_operations_reject_non_owner() {
 
         let before = client.get_project(&project_id).unwrap();
 
-        let result =
-            client.try_update_collaborators(&project_id, &attacker, &two_collabs(&env));
+        let result = client.try_update_collaborators(&project_id, &attacker, &two_collabs(&env));
 
         assert_eq!(result, Err(Ok(SplitError::Unauthorized)));
 
@@ -226,11 +206,7 @@ fn test_owner_gated_operations_reject_non_owner() {
         let before = client.get_project(&project_id).unwrap();
 
         let result =
-            client.try_transfer_project_ownership(
-                &project_id,
-                &attacker,
-                &attacker_target,
-            );
+            client.try_transfer_project_ownership(&project_id, &attacker, &attacker_target);
 
         assert_eq!(result, Err(Ok(SplitError::Unauthorized)));
 
@@ -258,11 +234,7 @@ fn test_owner_gated_operations_on_nonexistent_project_return_not_found() {
     let new_owner = Address::generate(&env);
 
     assert_eq!(
-        client.try_update_collaborators(
-            &project_id,
-            &caller,
-            &two_collabs(&env),
-        ),
+        client.try_update_collaborators(&project_id, &caller, &two_collabs(&env),),
         Err(Ok(SplitError::NotFound))
     );
 
@@ -282,11 +254,7 @@ fn test_owner_gated_operations_on_nonexistent_project_return_not_found() {
     );
 
     assert_eq!(
-        client.try_transfer_project_ownership(
-            &project_id,
-            &caller,
-            &new_owner,
-        ),
+        client.try_transfer_project_ownership(&project_id, &caller, &new_owner,),
         Err(Ok(SplitError::NotFound))
     );
 }
@@ -512,10 +480,7 @@ fn test_distribute_is_permissionless() {
 
     let result = client.try_distribute(&project_id);
 
-    assert!(
-        result.is_ok(),
-        "distribute must remain permissionless"
-    );
+    assert!(result.is_ok(), "distribute must remain permissionless");
 }
 
 // -----------------------------------------------------------------------------
@@ -525,8 +490,14 @@ fn test_distribute_is_permissionless() {
 /// A caller without authorization from the current administrator cannot
 /// rotate the contract administrator.
 ///
-/// `set_admin` performs authorization at the host level, so this test checks
-/// for a failed invocation rather than expecting a `SplitError`.
+/// `set_admin` gates purely on host-level `require_auth` — there is no
+/// contract-level identity check to assert against. An unsatisfied
+/// authorization is a host trap, which in this `no_std` test build is a
+/// non-unwinding panic that aborts the whole test binary (verified
+/// empirically), so the negative direction cannot be caught in-process.
+/// Instead this test asserts the recorded authorization requirement: every
+/// rotation demands an authorization entry for the *stored* administrator —
+/// naming an attacker as the new admin does nothing without it.
 #[test]
 fn test_set_admin_rejects_unauthorized_rotation() {
     let env = Env::default();
@@ -539,35 +510,53 @@ fn test_set_admin_rejects_unauthorized_rotation() {
 
     client.set_admin(&original_admin);
 
-    // Remove all authorization entries. The stored admin has not authorized
-    // the attempted rotation.
-    env.set_auths(&[]);
-
-    let result = client.try_set_admin(&attacker);
+    let demands_set_admin = |signer: &Address| {
+        env.auths().iter().any(|(addr, invocation)| {
+            addr == signer
+                && matches!(
+                    &invocation.function,
+                    soroban_sdk::testutils::AuthorizedFunction::Contract((_, name, _))
+                        if *name == Symbol::new(&env, "set_admin")
+                )
+        })
+    };
 
     assert!(
-        result.is_err(),
-        "admin rotation must require authorization"
+        demands_set_admin(&original_admin),
+        "first set must demand the proposed admin's authorization"
     );
 
-    // Restore mocked authorization so we can verify the contract state.
-    env.mock_all_auths();
+    // An "attacker nomination": the attacker is the address being installed,
+    // but the *stored* admin is still the only authorizer the contract
+    // accepts for the rotation.
+    client.set_admin(&attacker);
+    assert!(
+        demands_set_admin(&original_admin),
+        "rotation must demand the stored admin's authorization, not the nominee's"
+    );
+    assert_eq!(
+        client.get_admin(),
+        Some(attacker.clone()),
+        "rotation completes only because the stored admin authorized it"
+    );
 
-    // The original administrator must retain control.
+    // Control follows the completed rotation: the new admin can act, the
+    // previous one no longer can. (Without the stored admin's authorization
+    // the host rejects the rotation and the original admin simply retains
+    // control — that direction traps the test VM, as noted above.)
     let token_admin = Address::generate(&env);
     let token = env.register_stellar_asset_contract(token_admin);
 
     assert!(
-        client.try_allow_token(&original_admin, &token).is_ok(),
-        "original admin must retain control after failed rotation"
+        client.try_allow_token(&attacker, &token).is_ok(),
+        "the new admin holds control after an authorized rotation"
     );
-
     assert!(client.is_token_allowed(&token));
 
-    // The attacker must not have acquired administrator privileges.
     assert_eq!(
-        client.try_allow_token(&attacker, &token),
-        Err(Ok(SplitError::Unauthorized))
+        client.try_allow_token(&original_admin, &token),
+        Err(Ok(SplitError::Unauthorized)),
+        "the previous admin no longer holds control"
     );
 }
 

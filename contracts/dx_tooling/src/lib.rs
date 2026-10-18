@@ -1,13 +1,15 @@
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 pub mod compiler;
-pub mod simulator;
+#[cfg(feature = "std")]
 pub mod deployer;
-pub mod validator;
-pub mod types;
 pub mod errors;
+pub mod simulator;
+pub mod types;
+pub mod validator;
 
 pub use compiler::*;
-pub use simulator::*;
+#[cfg(feature = "std")]
 pub use deployer::*;
+pub use simulator::*;
 pub use validator::*;

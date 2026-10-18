@@ -93,7 +93,12 @@ impl<'a> Scenario<'a> {
         let token = env.register_stellar_asset_contract(token_admin);
         let contract_id = env.register_contract(None, SplitNairaContract);
         let client = SplitNairaContractClient::new(env, &contract_id);
-        Scenario { env, client, contract_id, token }
+        Scenario {
+            env,
+            client,
+            contract_id,
+            token,
+        }
     }
 
     fn create(&self, id: &str, collabs: &Vec<Collaborator>) -> Symbol {
@@ -171,8 +176,9 @@ fn prop_repeated_deposits_accumulate_exactly() {
         let collabs = random_collaborators(&env, rng);
         let project_id = s.create("prop_accumulate", &collabs);
 
-        let funders: std::vec::Vec<Address> =
-            (0..rng.range(1, 3)).map(|_| Address::generate(&env)).collect();
+        let funders: std::vec::Vec<Address> = (0..rng.range(1, 3))
+            .map(|_| Address::generate(&env))
+            .collect();
         let deposits = rng.range(1, 12);
         let mut expected = 0i128;
 
@@ -195,7 +201,11 @@ fn prop_repeated_deposits_accumulate_exactly() {
         assert_eq!(project.distribution_round, 0, "seed={seed}");
         assert_eq!(project.total_distributed, 0, "seed={seed}");
         for c in collabs.iter() {
-            assert_eq!(s.client.get_claimed(&project_id, &c.address), 0, "seed={seed}");
+            assert_eq!(
+                s.client.get_claimed(&project_id, &c.address),
+                0,
+                "seed={seed}"
+            );
             assert_eq!(s.token_balance(&c.address), 0, "seed={seed}");
         }
     });
@@ -210,7 +220,10 @@ fn prop_distribution_after_repeated_deposits_is_path_independent() {
         // Twin project with identical shares but fresh recipient addresses.
         let mut twin = Vec::new(&env);
         for c in collabs.iter() {
-            twin.push_back(Collaborator { address: Address::generate(&env), ..c });
+            twin.push_back(Collaborator {
+                address: Address::generate(&env),
+                ..c
+            });
         }
         let many = s.create("prop_many", &collabs);
         let single = s.create("prop_single", &twin);
@@ -231,8 +244,16 @@ fn prop_distribution_after_repeated_deposits_is_path_independent() {
         for (i, (a, b)) in collabs.iter().zip(twin.iter()).enumerate() {
             let paid_many = s.token_balance(&a.address);
             assert_eq!(paid_many, expected[i], "collab {i}, seed={seed}");
-            assert_eq!(paid_many, s.token_balance(&b.address), "collab {i}, seed={seed}");
-            assert_eq!(s.client.get_claimed(&many, &a.address), paid_many, "seed={seed}");
+            assert_eq!(
+                paid_many,
+                s.token_balance(&b.address),
+                "collab {i}, seed={seed}"
+            );
+            assert_eq!(
+                s.client.get_claimed(&many, &a.address),
+                paid_many,
+                "seed={seed}"
+            );
         }
 
         for id in [&many, &single] {
@@ -269,7 +290,11 @@ fn prop_interleaved_deposits_do_not_leak_between_projects() {
 
         assert_eq!(s.client.get_balance(&a), total_a, "seed={seed}");
         assert_eq!(s.client.get_balance(&b), total_b, "seed={seed}");
-        assert_eq!(s.token_balance(&s.contract_id), total_a + total_b, "seed={seed}");
+        assert_eq!(
+            s.token_balance(&s.contract_id),
+            total_a + total_b,
+            "seed={seed}"
+        );
 
         // Distributing one project must leave the other's balance untouched.
         if total_a > 0 {
