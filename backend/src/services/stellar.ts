@@ -18,6 +18,11 @@ import {
 } from "./metrics.js";
 import { DEFAULT_RPC_MAX_RETRIES, boundRetryBudget } from "./rpc-retry-budget.js";
 import { installRpcResponseValidation } from "./rpc-response-validation.js";
+import {
+  installRpcProviderFailover,
+  parseRpcProviderUrls,
+  RpcProviderHealthPolicy,
+} from "./rpc-provider-health.js";
 
 export { RPC_RETRY_BUDGET_MAX_RETRIES, boundRetryBudget } from "./rpc-retry-budget.js";
 
@@ -309,9 +314,16 @@ export function getStellarRpcServer(): rpc.Server {
   }
 
   const config = loadStellarConfig();
+  const providerUrls = parseRpcProviderUrls(config.sorobanRpcUrl, getEnv().SOROBAN_RPC_BACKUP_URLS);
   cachedRpcServer = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
   // Issue #1494: validate every JSON-RPC response before the SDK parses it.
+  // Register validation first: malformed/stale responses must never count as a
+  // successful provider health check.
   installRpcResponseValidation(cachedRpcServer);
+  installRpcProviderFailover(
+    cachedRpcServer,
+    new RpcProviderHealthPolicy(providerUrls, { failureThreshold: 1, cooldownMs: 30_000 }),
+  );
   return cachedRpcServer;
 }
 

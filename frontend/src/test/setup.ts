@@ -34,15 +34,15 @@ const messages: Record<string, string> = {
 function getNestedValue(obj: unknown, path: string): string | undefined {
   if (!obj || typeof obj !== "object") return undefined;
   const parts = path.split(".");
-  let current: any = obj;
+  let current: unknown = obj;
   for (const part of parts) {
     if (current == null || typeof current !== "object") return undefined;
-    current = current[part];
+    current = (current as Record<string, unknown>)[part];
   }
   return typeof current === "string" ? current : undefined;
 }
 
-function formatMessage(msg: string, values?: Record<string, any>): string {
+function formatMessage(msg: string, values?: Record<string, unknown>): string {
   if (!values) return msg;
   let formatted = msg;
   for (const [k, v] of Object.entries(values)) {
@@ -53,7 +53,7 @@ function formatMessage(msg: string, values?: Record<string, any>): string {
 
 vi.mock("next-intl", () => ({
   useTranslations: (namespace?: string) => {
-    return (key: string, values?: Record<string, any>) => {
+    return (key: string, values?: Record<string, unknown>) => {
       const fullKey = namespace ? `${namespace}.${key}` : key;
       const resolved =
         getNestedValue(enMessages, fullKey) ??

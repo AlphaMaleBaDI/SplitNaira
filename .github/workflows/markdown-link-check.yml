@@ -24,6 +24,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -32,19 +34,20 @@ jobs:
       - name: Install markdown-link-check
         run: npm install -g markdown-link-check
 
-      - name: Check internal relative links in docs
+      - name: Check links in changed Markdown files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          find docs runbooks -name "*.md" -print0 \
-            | xargs -0 -I{} markdown-link-check \
-                --config .github/markdown-link-check-config.json \
-                --verbose \
-                {} \
-            || EXIT_CODE=$?
-          # Also check top-level markdown files
-          find . -maxdepth 1 -name "*.md" -print0 \
-            | xargs -0 -I{} markdown-link-check \
-                --config .github/markdown-link-check-config.json \
-                --verbose \
-                {} \
-            || EXIT_CODE=$?
-          exit ${EXIT_CODE:-0}
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+
+          mapfile -d '' files < <(git diff --name-only --diff-filter=ACMR -z "$BASE_SHA"...HEAD -- 'docs/**/*.md' 'runbooks/**/*.md' '*.md')
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No Markdown files changed; skipping link validation."
+            exit 0
+          fi
+
+          for file in "${files[@]}"; do
+            markdown-link-check --config .github/markdown-link-check-config.json --verbose "$file"
+          done
