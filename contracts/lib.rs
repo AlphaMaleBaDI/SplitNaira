@@ -48,6 +48,8 @@ mod ttl_renewal_tests;
 mod cost_benchmark_tests;
 #[cfg(test)]
 mod deposit_property_tests;
+#[cfg(test)]
+mod split_sum_property_tests;
 mod pause_claim_tests;
 #[cfg(test)]
 mod pause_state_transition_tests;
