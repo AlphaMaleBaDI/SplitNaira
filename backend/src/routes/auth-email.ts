@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { IsNull } from "typeorm";
 import { getMaxSessionVersionForEmail, revokeSessionsForEmail } from "../services/session-revocation.js";
 import { verificationResendCooldown } from "../services/verification-resend-cooldown.js";
+import { logAuthEvent } from "../services/auth-events.js";
 
 export const authEmailRouter = Router();
 
@@ -58,6 +59,8 @@ authEmailRouter.post("/password-reset/request", async (req: Request, res: Respon
     });
 
     if (!user) {
+      // Same response as the known-account path; only the server log differs.
+      logAuthEvent(res, "password_reset_requested", "success", { email, reason: "no_account" });
       return res.status(202).json({ success: true });
     }
 
@@ -74,6 +77,7 @@ authEmailRouter.post("/password-reset/request", async (req: Request, res: Respon
       resetUrl,
     });
 
+    logAuthEvent(res, "password_reset_requested", "success", { userId: user.id, email });
     return res.status(202).json({ success: true });
   } catch (error) {
     return next(error);
@@ -97,16 +101,19 @@ authEmailRouter.post("/password-reset/confirm", async (req: Request, res: Respon
     const { token } = passwordResetConfirmSchema.parse(req.body);
     const payload = verifyEmailFlowToken(token, "password_reset");
     if (!payload) {
-      return res.status(400).json({ error: "invalid_or_expired_token" });
+      logAuthEvent(res, "password_reset_confirmed", "failure", { reason: "invalid_or_expired_token" });
+      return res.status(400).json({ error: "invalid_or_expired_token", requestId: res.locals.requestId });
     }
 
     // Tokens issued before #1446 carry no `sv`; they were issued against version 0.
     const revoked = await revokeSessionsForEmail(payload.email, payload.sv ?? 0);
     if (revoked === 0) {
       // Already used, superseded by a newer reset, or no account left for this email.
-      return res.status(400).json({ error: "invalid_or_expired_token" });
+      logAuthEvent(res, "password_reset_confirmed", "failure", { email: payload.email, reason: "invalid_or_expired_token" });
+      return res.status(400).json({ error: "invalid_or_expired_token", requestId: res.locals.requestId });
     }
 
+    logAuthEvent(res, "password_reset_confirmed", "success", { email: payload.email, sessionsRevoked: true });
     return res.status(200).json({ success: true, email: payload.email, sessionsRevoked: true });
   } catch (error) {
     return next(error);
@@ -138,6 +145,7 @@ authEmailRouter.post("/email-verification/resend", async (req: Request, res: Res
     const slot = verificationResendCooldown.tryAcquire(email);
     if (!slot.ok) {
       const retryAfterSeconds = Math.ceil(slot.retryAfterMs / 1000);
+      logAuthEvent(res, "email_verification_resent", "failure", { email, reason: "RESEND_COOLDOWN" });
       res.setHeader("Retry-After", String(retryAfterSeconds));
       return res.status(429).json({
         error: "resend_cooldown",
@@ -165,6 +173,7 @@ authEmailRouter.post("/email-verification/resend", async (req: Request, res: Res
       });
     }
 
+    logAuthEvent(res, "email_verification_resent", "success", { userId: user?.id, email });
     return res.status(202).json({
       success: true,
       retryAfterSeconds: Math.ceil(verificationResendCooldown.cooldownMs / 1000),
@@ -183,13 +192,15 @@ authEmailRouter.post("/email-verification/confirm", async (req: Request, res: Re
     const { token } = emailVerificationConfirmSchema.parse(req.body);
     const payload = verifyEmailFlowToken(token, "email_verification");
     if (!payload) {
-      return res.status(400).json({ error: "invalid_or_expired_token" });
+      logAuthEvent(res, "email_verified", "failure", { reason: "invalid_or_expired_token" });
+      return res.status(400).json({ error: "invalid_or_expired_token", requestId: res.locals.requestId });
     }
 
     await getDataSource()
       .getRepository(User)
       .update({ email: payload.email, emailVerifiedAt: IsNull() }, { emailVerifiedAt: new Date() });
 
+    logAuthEvent(res, "email_verified", "success", { email: payload.email });
     return res.status(200).json({ success: true, email: payload.email });
   } catch (error) {
     return next(error);
