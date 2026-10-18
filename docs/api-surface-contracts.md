@@ -65,6 +65,32 @@ rather than emitting a misleading header.
 `GET /health` (the backwards-compatibility alias for `GET /health/ready`) is
 the first registered deprecation.
 
+## Transaction pagination contract
+
+`GET /transactions/history` and `GET /transactions/recipient/:walletAddress`
+share one pagination contract (#1259):
+
+- **Stable order.** Rows are ordered by `(timestamp DESC, id DESC)`. `timestamp`
+  alone is not a total order, so `id` is the tie-breaker.
+- **Cursor.** A response with more rows carries `nextCursor`. Send it back as
+  `?cursor=<value>` to fetch the next page. The cursor is opaque (base64url of
+  `{ t, i }`) and is validated before it reaches SQL; a malformed value is
+  `400 VALIDATION_ERROR` with `details: { cursor: "invalid" }` and no query is
+  run.
+- **Page size.** `limit` is capped at 100; `101` is a `400`.
+- **Offset fallback.** `offset` remains supported for existing clients. When
+  both `cursor` and `offset` are sent, `cursor` wins — mixing them would make
+  the page depend on inserts that happened since the cursor was issued.
+- **`total`** always counts every row matching the filters, not just the rows
+  after the cursor.
+- **`hasMore`** is derived from a `limit + 1` probe, so a full last page is not
+  reported as having a next page.
+
+The response shape is documented in `docs/openapi.yaml`; the codec lives in
+`backend/src/lib/keyset-cursor.ts` and is pinned by
+`backend/src/__tests__/keyset-cursor.test.ts` and
+`backend/src/__tests__/transactions-pagination.test.ts`.
+
 ## Per-route rate limits
 
 Route groups have deliberately distinct budgets (auth, admin, read, write,

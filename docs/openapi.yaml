@@ -692,6 +692,9 @@ paths:
                       - alias
                       - basisPoints
                   minItems: 2
+                expiresAt:
+                  type: string
+                  format: date-time
               required:
                 - owner
                 - projectId
@@ -2669,6 +2672,61 @@ paths:
                 error: INTERNAL_ERROR
                 message: An unexpected error occurred. Please try again later.
                 requestId: b6f1a2d4-8c3e-4a1b-9f2e-6d5c7a8b9c0d
+    delete:
+      summary: Soft-delete the authenticated user's account
+      description: Marks the account deleted rather than removing the row;
+        financial/audit records are untouched. See lib/soft-delete.ts for the
+        retention policy.
+      tags:
+        - Users
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Account soft-deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  walletAddress:
+                    type: string
+                  deletedAt:
+                    type: string
+                    format: date-time
+                required:
+                  - walletAddress
+                  - deletedAt
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              example:
+                error: UNAUTHORIZED
+                message: Missing or invalid bearer token / admin API key.
+                requestId: b6f1a2d4-8c3e-4a1b-9f2e-6d5c7a8b9c0d
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              example:
+                error: NOT_FOUND
+                message: Project afrobeats_001 does not exist.
+                requestId: b6f1a2d4-8c3e-4a1b-9f2e-6d5c7a8b9c0d
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              example:
+                error: INTERNAL_ERROR
+                message: An unexpected error occurred. Please try again later.
+                requestId: b6f1a2d4-8c3e-4a1b-9f2e-6d5c7a8b9c0d
   /users/{walletAddress}:
     get:
       summary: Get user by wallet address
@@ -2744,11 +2802,164 @@ paths:
                 error: INTERNAL_ERROR
                 message: An unexpected error occurred. Please try again later.
                 requestId: b6f1a2d4-8c3e-4a1b-9f2e-6d5c7a8b9c0d
+  /transactions/export:
+    get:
+      summary: Export the authenticated wallet's own transaction history
+      description: Always scoped to the authenticated wallet from the bearer token,
+        never a request parameter. format=csv (default) streams an
+        injection-safe CSV of the full matching result set, capped at 50,000
+        rows. format=json returns one limit/offset page.
+      tags:
+        - Transactions
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            enum:
+              - csv
+              - json
+            default: csv
+          required: false
+          name: format
+          in: query
+        - schema:
+            type: integer
+            minimum: 0
+            exclusiveMinimum: true
+          required: false
+          name: startDate
+          in: query
+        - schema:
+            type: integer
+            minimum: 0
+            exclusiveMinimum: true
+          required: false
+          name: endDate
+          in: query
+        - schema:
+            type: string
+            enum:
+              - pending
+              - completed
+              - failed
+          required: false
+          name: status
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: integer
+            nullable: true
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+      responses:
+        "200":
+          description: CSV file (format=csv) or a paginated JSON page (format=json)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transactions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        roundId:
+                          type: string
+                        recipient:
+                          type: string
+                        amount:
+                          type: string
+                        token:
+                          type: string
+                        timestamp:
+                          type: integer
+                        txHash:
+                          type: string
+                        status:
+                          type: string
+                          enum:
+                            - pending
+                            - completed
+                            - failed
+                      required:
+                        - id
+                        - roundId
+                        - recipient
+                        - amount
+                        - token
+                        - timestamp
+                        - txHash
+                        - status
+                  total:
+                    type: integer
+                    minimum: 0
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+                  hasMore:
+                    type: boolean
+                  nextCursor:
+                    type: string
+                    nullable: true
+                required:
+                  - transactions
+                  - total
+                  - limit
+                  - offset
+                  - hasMore
+                  - nextCursor
+            text/csv:
+              schema:
+                type: string
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              example:
+                error: UNAUTHORIZED
+                message: Missing or invalid bearer token / admin API key.
+                requestId: b6f1a2d4-8c3e-4a1b-9f2e-6d5c7a8b9c0d
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              example:
+                error: INTERNAL_ERROR
+                message: An unexpected error occurred. Please try again later.
+                requestId: b6f1a2d4-8c3e-4a1b-9f2e-6d5c7a8b9c0d
   /transactions/history:
     get:
       summary: Query payout transaction history
-      description: Returns paginated payout records with optional wallet, date, and
-        status filters.
+      description: Returns payout records with optional wallet, date, and status
+        filters. Use `cursor` with the `nextCursor` from the previous response
+        for stable keyset pagination (recommended for large result sets);
+        `offset` remains supported for backward compatibility. When both are
+        supplied, `cursor` takes precedence. `limit` is capped at 100.
       tags:
         - Transactions
       parameters:
@@ -2796,6 +3007,13 @@ paths:
             default: 0
           required: false
           name: offset
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
           in: query
       responses:
         "200":
@@ -2846,11 +3064,18 @@ paths:
                     type: integer
                   offset:
                     type: integer
+                  hasMore:
+                    type: boolean
+                  nextCursor:
+                    type: string
+                    nullable: true
                 required:
                   - transactions
                   - total
                   - limit
                   - offset
+                  - hasMore
+                  - nextCursor
         "400":
           description: Validation error
           content:
@@ -3024,7 +3249,9 @@ paths:
   /transactions/recipient/{walletAddress}:
     get:
       summary: List transactions for a recipient
-      description: Returns all payout records sent to the given Stellar wallet address.
+      description: Returns payout records sent to the given Stellar wallet address.
+        Supports the same cursor/limit pagination as /transactions/history; the
+        response always includes the wallet address.
       tags:
         - Transactions
       parameters:
@@ -3034,6 +3261,29 @@ paths:
           required: true
           name: walletAddress
           in: path
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: integer
+            nullable: true
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
       responses:
         "200":
           description: Recipient transaction list
@@ -3078,11 +3328,25 @@ paths:
                         - status
                   total:
                     type: integer
+                    minimum: 0
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+                  hasMore:
+                    type: boolean
+                  nextCursor:
+                    type: string
+                    nullable: true
                   walletAddress:
                     type: string
                 required:
                   - transactions
                   - total
+                  - limit
+                  - offset
+                  - hasMore
+                  - nextCursor
                   - walletAddress
         "400":
           description: Validation error

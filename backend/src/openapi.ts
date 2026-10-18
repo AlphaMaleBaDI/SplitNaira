@@ -38,6 +38,7 @@ import {
 import {
   transactionHistoryQuerySchema,
   transactionExportQuerySchema,
+  transactionRecipientQuerySchema,
   transactionRecordSchema,
   transactionReceiptSchema,
   transactionHistoryResponseSchema,
@@ -1172,7 +1173,11 @@ registry.registerPath({
   method: "get",
   path: "/transactions/history",
   summary: "Query payout transaction history",
-  description: "Returns paginated payout records with optional wallet, date, and status filters.",
+  description:
+    "Returns payout records with optional wallet, date, and status filters. " +
+    "Use `cursor` with the `nextCursor` from the previous response for stable keyset pagination " +
+    "(recommended for large result sets); `offset` remains supported for backward compatibility. " +
+    "When both are supplied, `cursor` takes precedence. `limit` is capped at 100.",
   tags: ["Transactions"],
   request: { query: transactionHistoryQuerySchema },
   responses: {
@@ -1222,19 +1227,20 @@ registry.registerPath({
   method: "get",
   path: "/transactions/recipient/{walletAddress}",
   summary: "List transactions for a recipient",
-  description: "Returns all payout records sent to the given Stellar wallet address.",
+  description:
+    "Returns payout records sent to the given Stellar wallet address. Supports the same " +
+    "cursor/limit pagination as /transactions/history; the response always includes the wallet address.",
   tags: ["Transactions"],
   request: {
     params: z.object({ walletAddress: z.string().regex(/^G[A-Z2-7]{55}$/) }),
+    query: transactionRecipientQuerySchema,
   },
   responses: {
     200: {
       description: "Recipient transaction list",
       content: {
         "application/json": {
-          schema: z.object({
-            transactions: z.array(transactionRecordSchema),
-            total: z.number().int(),
+          schema: transactionHistoryResponseSchema.extend({
             walletAddress: z.string(),
           }),
         },
