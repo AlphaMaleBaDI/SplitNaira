@@ -22,22 +22,9 @@
 //! belongs in the reliability and functional test suites.
 
 use crate::{
-    errors::SplitError,
-    Collaborator,
-    SplitNairaContract,
-    SplitNairaContractClient,
-    SplitProject,
+    errors::SplitError, Collaborator, SplitNairaContract, SplitNairaContractClient, SplitProject,
 };
-use soroban_sdk::{
-    testutils::Address as _,
-    token,
-    vec,
-    Address,
-    Env,
-    String,
-    Symbol,
-    Vec,
-};
+use soroban_sdk::{testutils::Address as _, token, vec, Address, Env, String, Symbol, Vec};
 
 // -----------------------------------------------------------------------------
 // Shared helpers
@@ -131,18 +118,12 @@ fn assert_project_unchanged(before: &SplitProject, after: &SplitProject) {
         let before_collaborator = before.collaborators.get(index).unwrap();
         let after_collaborator = after.collaborators.get(index).unwrap();
 
-        assert_eq!(
-            before_collaborator.address,
-            after_collaborator.address
-        );
+        assert_eq!(before_collaborator.address, after_collaborator.address);
         assert_eq!(
             before_collaborator.basis_points,
             after_collaborator.basis_points
         );
-        assert_eq!(
-            before_collaborator.alias,
-            after_collaborator.alias
-        );
+        assert_eq!(before_collaborator.alias, after_collaborator.alias);
     }
 }
 
@@ -168,8 +149,7 @@ fn test_owner_gated_operations_reject_non_owner() {
 
         let before = client.get_project(&project_id).unwrap();
 
-        let result =
-            client.try_update_collaborators(&project_id, &attacker, &two_collabs(&env));
+        let result = client.try_update_collaborators(&project_id, &attacker, &two_collabs(&env));
 
         assert_eq!(result, Err(Ok(SplitError::Unauthorized)));
 
@@ -226,11 +206,7 @@ fn test_owner_gated_operations_reject_non_owner() {
         let before = client.get_project(&project_id).unwrap();
 
         let result =
-            client.try_transfer_project_ownership(
-                &project_id,
-                &attacker,
-                &attacker_target,
-            );
+            client.try_transfer_project_ownership(&project_id, &attacker, &attacker_target);
 
         assert_eq!(result, Err(Ok(SplitError::Unauthorized)));
 
@@ -258,11 +234,7 @@ fn test_owner_gated_operations_on_nonexistent_project_return_not_found() {
     let new_owner = Address::generate(&env);
 
     assert_eq!(
-        client.try_update_collaborators(
-            &project_id,
-            &caller,
-            &two_collabs(&env),
-        ),
+        client.try_update_collaborators(&project_id, &caller, &two_collabs(&env),),
         Err(Ok(SplitError::NotFound))
     );
 
@@ -282,11 +254,7 @@ fn test_owner_gated_operations_on_nonexistent_project_return_not_found() {
     );
 
     assert_eq!(
-        client.try_transfer_project_ownership(
-            &project_id,
-            &caller,
-            &new_owner,
-        ),
+        client.try_transfer_project_ownership(&project_id, &caller, &new_owner,),
         Err(Ok(SplitError::NotFound))
     );
 }
@@ -512,10 +480,7 @@ fn test_distribute_is_permissionless() {
 
     let result = client.try_distribute(&project_id);
 
-    assert!(
-        result.is_ok(),
-        "distribute must remain permissionless"
-    );
+    assert!(result.is_ok(), "distribute must remain permissionless");
 }
 
 // -----------------------------------------------------------------------------
@@ -545,10 +510,7 @@ fn test_set_admin_rejects_unauthorized_rotation() {
 
     let result = client.try_set_admin(&attacker);
 
-    assert!(
-        result.is_err(),
-        "admin rotation must require authorization"
-    );
+    assert!(result.is_err(), "admin rotation must require authorization");
 
     // Restore mocked authorization so we can verify the contract state.
     env.mock_all_auths();
@@ -611,5 +573,238 @@ fn test_set_admin_successful_rotation_transfers_control() {
     assert_eq!(
         client.try_allow_token(&original_admin, &token),
         Err(Ok(SplitError::Unauthorized))
+    );
+}
+
+// -----------------------------------------------------------------------------
+// 7. Additional admin-gated operations (issue #1250)
+// -----------------------------------------------------------------------------
+
+/// `allow_token` must reject unauthorized callers both before an admin is
+/// configured and after one is set.
+///
+/// Rejected calls must leave the allowlist untouched.
+#[test]
+fn test_allow_token_rejects_unauthorized_callers() {
+    // No admin configured yet.
+    {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let client = make_client(&env);
+        let caller = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(token_admin);
+
+        let result = client.try_allow_token(&caller, &token);
+
+        assert_eq!(result, Err(Ok(SplitError::AdminNotSet)));
+        assert!(!client.is_token_allowed(&token));
+    }
+
+    // Configured admin rejects an attacker.
+    {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let client = make_client(&env);
+        let admin = Address::generate(&env);
+        let attacker = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract(token_admin);
+
+        client.set_admin(&admin);
+
+        let result = client.try_allow_token(&attacker, &token);
+
+        assert_eq!(result, Err(Ok(SplitError::Unauthorized)));
+        assert!(!client.is_token_allowed(&token));
+    }
+}
+
+/// `set_max_collaborators` must reject unauthorized callers and leave the
+/// effective collaborator cap unchanged.
+#[test]
+fn test_set_max_collaborators_rejects_unauthorized_callers() {
+    // No admin configured yet.
+    {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let client = make_client(&env);
+        let caller = Address::generate(&env);
+
+        let before = client.get_max_collaborators();
+
+        let result = client.try_set_max_collaborators(&caller, &10);
+
+        assert_eq!(result, Err(Ok(SplitError::AdminNotSet)));
+        assert_eq!(client.get_max_collaborators(), before);
+    }
+
+    // Configured admin rejects an attacker.
+    {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let client = make_client(&env);
+        let admin = Address::generate(&env);
+        let attacker = Address::generate(&env);
+
+        client.set_admin(&admin);
+
+        let before = client.get_max_collaborators();
+
+        let result = client.try_set_max_collaborators(&attacker, &10);
+
+        assert_eq!(result, Err(Ok(SplitError::Unauthorized)));
+        assert_eq!(client.get_max_collaborators(), before);
+    }
+}
+
+/// `withdraw_unallocated` must reject unauthorized callers and leave the
+/// contract token balance untouched.
+#[test]
+fn test_withdraw_unallocated_rejects_unauthorized_callers() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client = make_client(&env);
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract(token_admin);
+    let recovery_to = Address::generate(&env);
+
+    client.set_admin(&admin);
+
+    let token_client = token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&client.address, &1_0000000i128);
+
+    let token_reader = token::Client::new(&env, &token);
+    let before = token_reader.balance(&client.address);
+
+    let result = client.try_withdraw_unallocated(&attacker, &token, &recovery_to, &1_0000000i128);
+
+    assert_eq!(result, Err(Ok(SplitError::Unauthorized)));
+    assert_eq!(
+        token_reader.balance(&client.address),
+        before,
+        "rejected withdrawal must not move tokens"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// 8. Caller-authorized deposit and project creation (issue #1250)
+// -----------------------------------------------------------------------------
+
+/// `create_project` requires authorization from the supplied owner.
+///
+/// With all mocked authorization entries removed, the host rejects the call
+/// and no project is created.
+#[test]
+fn test_create_project_requires_owner_authorization() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client = make_client(&env);
+    let token_admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract(token_admin);
+    let owner = Address::generate(&env);
+    let project_id = Symbol::new(&env, "auth_create");
+
+    env.set_auths(&[]);
+
+    let result = client.try_create_project(
+        &owner,
+        &project_id,
+        &String::from_str(&env, "Test Project"),
+        &String::from_str(&env, "music"),
+        &token,
+        &two_collabs(&env),
+    );
+
+    assert!(
+        result.is_err(),
+        "create_project must require owner authorization"
+    );
+
+    env.mock_all_auths();
+
+    assert!(
+        !client.project_exists(&project_id),
+        "rejected create_project must not create the project"
+    );
+}
+
+/// `deposit` requires authorization from the funding address.
+///
+/// With all mocked authorization entries removed, the host rejects the call
+/// and the project balance is not credited.
+#[test]
+fn test_deposit_requires_funder_authorization() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let project_id = Symbol::new(&env, "auth_deposit");
+    let (client, owner, token) = setup_project(&env, &project_id);
+
+    let token_client = token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&owner, &1_0000000i128);
+
+    let before = client.get_balance(&project_id);
+
+    env.set_auths(&[]);
+
+    let result = client.try_deposit(&project_id, &owner, &1_0000000i128);
+
+    assert!(
+        result.is_err(),
+        "deposit must require authorization from the funding address"
+    );
+
+    env.mock_all_auths();
+
+    assert_eq!(
+        client.get_balance(&project_id),
+        before,
+        "rejected deposit must not credit the project balance"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// 9. Permissionless batch distribution (issue #1250)
+// -----------------------------------------------------------------------------
+
+/// `batch_distribute` is intentionally permissionless, mirroring
+/// `distribute`.
+///
+/// No caller authorization is required because the operation only settles
+/// already-recorded collaborator shares.
+#[test]
+fn test_batch_distribute_is_permissionless() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let project_id = Symbol::new(&env, "permissionless_batch");
+    let (client, owner, token) = setup_project(&env, &project_id);
+
+    deposit_to_project(
+        &env,
+        &client,
+        &token,
+        &project_id,
+        &owner,
+        1_000_0000000i128,
+    );
+
+    env.set_auths(&[]);
+
+    let batch = soroban_sdk::vec![&env, project_id.clone()];
+    let result = client.try_batch_distribute(&batch);
+
+    assert!(
+        result.is_ok(),
+        "batch_distribute must remain permissionless"
     );
 }
