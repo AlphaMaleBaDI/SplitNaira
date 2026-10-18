@@ -93,7 +93,12 @@ impl<'a> Scenario<'a> {
         let token = env.register_stellar_asset_contract(token_admin);
         let contract_id = env.register_contract(None, SplitNairaContract);
         let client = SplitNairaContractClient::new(env, &contract_id);
-        Scenario { env, client, contract_id, token }
+        Scenario {
+            env,
+            client,
+            contract_id,
+            token,
+        }
     }
 
     fn create(&self, id: &str, collabs: &Vec<Collaborator>) -> Symbol {
@@ -171,8 +176,9 @@ fn prop_repeated_deposits_accumulate_exactly() {
         let collabs = random_collaborators(&env, rng);
         let project_id = s.create("prop_accumulate", &collabs);
 
-        let funders: std::vec::Vec<Address> =
-            (0..rng.range(1, 3)).map(|_| Address::generate(&env)).collect();
+        let funders: std::vec::Vec<Address> = (0..rng.range(1, 3))
+            .map(|_| Address::generate(&env))
+            .collect();
         let deposits = rng.range(1, 12);
         let mut expected = 0i128;
 
@@ -195,7 +201,11 @@ fn prop_repeated_deposits_accumulate_exactly() {
         assert_eq!(project.distribution_round, 0, "seed={seed}");
         assert_eq!(project.total_distributed, 0, "seed={seed}");
         for c in collabs.iter() {
-            assert_eq!(s.client.get_claimed(&project_id, &c.address), 0, "seed={seed}");
+            assert_eq!(
+                s.client.get_claimed(&project_id, &c.address),
+                0,
+                "seed={seed}"
+            );
             assert_eq!(s.token_balance(&c.address), 0, "seed={seed}");
         }
     });
@@ -210,7 +220,10 @@ fn prop_distribution_after_repeated_deposits_is_path_independent() {
         // Twin project with identical shares but fresh recipient addresses.
         let mut twin = Vec::new(&env);
         for c in collabs.iter() {
-            twin.push_back(Collaborator { address: Address::generate(&env), ..c });
+            twin.push_back(Collaborator {
+                address: Address::generate(&env),
+                ..c
+            });
         }
         let many = s.create("prop_many", &collabs);
         let single = s.create("prop_single", &twin);
@@ -231,8 +244,16 @@ fn prop_distribution_after_repeated_deposits_is_path_independent() {
         for (i, (a, b)) in collabs.iter().zip(twin.iter()).enumerate() {
             let paid_many = s.token_balance(&a.address);
             assert_eq!(paid_many, expected[i], "collab {i}, seed={seed}");
-            assert_eq!(paid_many, s.token_balance(&b.address), "collab {i}, seed={seed}");
-            assert_eq!(s.client.get_claimed(&many, &a.address), paid_many, "seed={seed}");
+            assert_eq!(
+                paid_many,
+                s.token_balance(&b.address),
+                "collab {i}, seed={seed}"
+            );
+            assert_eq!(
+                s.client.get_claimed(&many, &a.address),
+                paid_many,
+                "seed={seed}"
+            );
         }
 
         for id in [&many, &single] {
@@ -269,7 +290,11 @@ fn prop_interleaved_deposits_do_not_leak_between_projects() {
 
         assert_eq!(s.client.get_balance(&a), total_a, "seed={seed}");
         assert_eq!(s.client.get_balance(&b), total_b, "seed={seed}");
-        assert_eq!(s.token_balance(&s.contract_id), total_a + total_b, "seed={seed}");
+        assert_eq!(
+            s.token_balance(&s.contract_id),
+            total_a + total_b,
+            "seed={seed}"
+        );
 
         // Distributing one project must leave the other's balance untouched.
         if total_a > 0 {
@@ -310,5 +335,39 @@ fn prop_sub_threshold_deposits_accumulate_until_distributable() {
         assert_eq!(project.distribution_round, 1, "seed={seed}");
         assert_eq!(project.total_distributed, balance, "seed={seed}");
         assert_eq!(s.client.get_balance(&project_id), 0, "seed={seed}");
+    });
+}
+
+#[test]
+fn prop_fuzz_amount_and_allocation_boundaries() {
+    for_each_case(|seed, rng| {
+        let env = Env::default();
+        let s = Scenario::new(&env);
+
+        // Fuzz allocation boundary: 2 collaborators splitting 10,000 basis points across extreme shares
+        let c1_bps = rng.range(1, 9999) as u32;
+        let c2_bps = 10_000 - c1_bps;
+
+        let a1 = Address::generate(&env);
+        let a2 = Address::generate(&env);
+
+        let mut collabs = Vec::new(&env);
+        collabs.push_back(Collaborator { address: a1.clone(), share_bps: c1_bps });
+        collabs.push_back(Collaborator { address: a2.clone(), share_bps: c2_bps });
+
+        let project_id = s.create("fuzz_boundary", &collabs);
+        let funder = Address::generate(&env);
+
+        // Fuzz extreme amount bounds
+        let fuzzed_amount = rng.range(1, 5_000_000_000_000) as i128;
+        s.deposit(&project_id, &funder, fuzzed_amount);
+
+        assert_eq!(s.client.get_balance(&project_id), fuzzed_amount, "seed={seed}");
+        s.client.distribute(&project_id);
+
+        // Verify full liquidation and zero remainder leakage
+        assert_eq!(s.client.get_balance(&project_id), 0, "seed={seed}");
+        let project = s.client.get_project(&project_id).unwrap();
+        assert_eq!(project.total_distributed, fuzzed_amount, "seed={seed}");
     });
 }

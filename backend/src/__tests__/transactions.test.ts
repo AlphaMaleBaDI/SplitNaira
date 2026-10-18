@@ -28,9 +28,12 @@ const mockFind = vi.fn().mockImplementation((options) => {
 const mockQueryBuilder = {
   andWhere: vi.fn().mockReturnThis(),
   orderBy: vi.fn().mockReturnThis(),
+  addOrderBy: vi.fn().mockReturnThis(),
   skip: vi.fn().mockReturnThis(),
   take: vi.fn().mockReturnThis(),
-  getMany: mockGetMany
+  getMany: mockGetMany,
+  getCount: vi.fn().mockResolvedValue(mockTransactionRecords.length),
+  getManyAndCount: vi.fn().mockResolvedValue([mockTransactionRecords, mockTransactionRecords.length]),
 };
 
 vi.mock("../services/database.js", () => ({

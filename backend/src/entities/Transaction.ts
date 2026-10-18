@@ -21,6 +21,10 @@ export const TRANSACTION_AMOUNT_CHECK = `CASE WHEN "amount" ~ '^(0|[1-9][0-9]{0,
 @Index("IDX_transactions_recipient", ["recipient"])
 @Index("IDX_transactions_timestamp", ["timestamp"])
 @Index("IDX_transactions_recipient_timestamp", ["recipient", "timestamp"])
+// Keyset pagination order (#1259): the cursor is (timestamp, id), so the
+// index must match both columns. Direction is set by the migration.
+@Index("IDX_transactions_timestamp_id", ["timestamp", "id"])
+@Index("IDX_transactions_recipient_timestamp_id", ["recipient", "timestamp", "id"])
 export class TransactionRecord {
   @PrimaryGeneratedColumn("uuid")
   id!: string;

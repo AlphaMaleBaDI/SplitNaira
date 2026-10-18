@@ -22,6 +22,35 @@ export async function getSessionVersion(walletAddress: string): Promise<number |
   return user ? (user.sessionVersion ?? 0) : null;
 }
 
+/**
+ * Invalidates the wallet's sessions (logout, #1451) by bumping its
+ * `sessionVersion`, but only if it still equals `expectedVersion`, the
+ * version carried by the token that asked to log out.
+ *
+ * The condition keeps logout idempotent and race-safe: two tabs logging out
+ * with the same token bump the version once, and a stale logout can't revoke
+ * a session that was created after the first logout.
+ *
+ * Returns 1 when sessions were revoked, 0 when there was nothing to revoke
+ * (already logged out, or no `users` row for this wallet).
+ */
+export async function revokeSessionForWallet(
+  walletAddress: string,
+  expectedVersion: number
+): Promise<number> {
+  const result = await getDataSource()
+    .getRepository(User)
+    .createQueryBuilder()
+    .update(User)
+    .set({ sessionVersion: () => `"sessionVersion" + 1` })
+    .where(`"walletAddress" = :walletAddress AND "sessionVersion" = :expectedVersion`, {
+      walletAddress,
+      expectedVersion,
+    })
+    .execute();
+  return result.affected ?? 0;
+}
+
 /** Highest session version among accounts registered with `email`, or null if there are none. */
 export async function getMaxSessionVersionForEmail(email: string): Promise<number | null> {
   const row = await getDataSource()

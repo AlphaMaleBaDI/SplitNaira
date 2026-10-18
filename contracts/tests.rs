@@ -5,14 +5,15 @@
     clippy::duplicated_attributes
 )]
 
-extern crate std;
 extern crate alloc;
+extern crate std;
 
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, EnvTestConfig, Events as _, Ledger},
     token, vec, Address, Env, FromVal, IntoVal, String, Symbol, TryFromVal, TryIntoVal, Vec,
 };
+use std::string::ToString;
 
 // ============================================================
 //  TEST HELPERS
@@ -85,10 +86,9 @@ fn seed_bucketed_projects(
             env.storage()
                 .persistent()
                 .set(&DataKey::Project(project_id.clone()), &project);
-            env.storage().persistent().set(
-                &DataKey::ProjectBalance(project_id.clone()),
-                &0i128,
-            );
+            env.storage()
+                .persistent()
+                .set(&DataKey::ProjectBalance(project_id.clone()), &0i128);
 
             let target_bucket = i / BUCKET_SIZE;
             let offset = i % BUCKET_SIZE;
@@ -793,8 +793,14 @@ fn test_update_collaborators_emits_event() {
     let events = env.events().all();
     let last_event = events.last().unwrap().clone();
     assert_eq!(last_event.0, contract_id);
-    assert_eq!(Symbol::from_val(&env, &last_event.1.get(0).unwrap()), Symbol::new(&env, "collaborators_updated"));
-    assert_eq!(Symbol::from_val(&env, &last_event.1.get(1).unwrap()), project_id);
+    assert_eq!(
+        Symbol::from_val(&env, &last_event.1.get(0).unwrap()),
+        Symbol::new(&env, "collaborators_updated")
+    );
+    assert_eq!(
+        Symbol::from_val(&env, &last_event.1.get(1).unwrap()),
+        project_id
+    );
     assert_eq!(Symbol::from_val(&env, &last_event.2), project_id);
 }
 
@@ -1084,25 +1090,25 @@ fn test_deposit_rejects_zero_amount() {
 // #[test]
 // fn test_deposit_fails_with_wrong_token() {
 //     let (env, _admin, project_token) = create_test_env();
-//     
+//
 //     // Create a different token contract
 //     let wrong_token_admin = Address::generate(&env);
 //     let wrong_token = env.register_stellar_asset_contract(wrong_token_admin);
-//     
+//
 //     let contract_id = env.register_contract(None, SplitNairaContract);
 //     let client = SplitNairaContractClient::new(&env, &contract_id);
-// 
+//
 //     let owner = Address::generate(&env);
 //     let funder = Address::generate(&env);
 //     let alice = Address::generate(&env);
 //     let bob = Address::generate(&env);
-// 
+//
 //     let collabs = make_collaborators(
 //         &env,
 //         Vec::from_slice(&env, &[alice.clone(), bob.clone()]),
 //         Vec::from_slice(&env, &[5000u32, 5000u32]),
 //     );
-// 
+//
 //     let project_id = Symbol::new(&env, "wrong_token_test");
 //     client.create_project(
 //         &owner,
@@ -1112,15 +1118,15 @@ fn test_deposit_rejects_zero_amount() {
 //         &project_token,
 //         &collabs,
 //     );
-// 
+//
 //     // Mint wrong token to funder
 //     let wrong_token_client = token::StellarAssetClient::new(&env, &wrong_token);
 //     wrong_token_client.mint(&funder, &1_000_0000000i128);
-// 
+//
 //     // Ensure funder has no project_token
 //     let project_token_client = token::Client::new(&env, &project_token);
 //     assert_eq!(project_token_client.balance(&funder), 0);
-// 
+//
 //     // Attempt to deposit. Since the contract implicitly uses project_token, this will fail
 //     // at the Soroban token transfer level (funder has 0 balance/auth for project_token).
 //     let result = client.try_deposit(&project_id, &funder, &100_0000000i128);
@@ -1644,21 +1650,29 @@ fn test_basis_points_invariant_table() {
 
     // Each tuple is (basis_points_slice, expected_error_opt, duplicate_addresses_flag)
     const CASES: &[(&[u32], Option<SplitError>, bool)] = &[
-        (&[5000, 5000], None, false), // simple 50/50
-        (&[0, 0], Some(SplitError::ZeroShare), false), // all zeros -> ZeroShare
+        (&[5000, 5000], None, false),                             // simple 50/50
+        (&[0, 0], Some(SplitError::ZeroShare), false),            // all zeros -> ZeroShare
         (&[10000], Some(SplitError::TooFewCollaborators), false), // single collaborator -> TooFew
-        (&[6000, 3000], Some(SplitError::InvalidSplit), false), // sums to 9000
-        (&[6000, 4001], Some(SplitError::InvalidSplit), false), // 10001
-        (&[3333, 3333, 3334], None, false), // three-way equal-ish -> OK
-        (&[10000, 0], Some(SplitError::ZeroShare), false), // zero share present
-        (&[5000, 5000, 0], Some(SplitError::ZeroShare), false), // zero among many
-        (&[1, 9999], None, false), // edge exact 10000
-        (&[2, 9999], Some(SplitError::InvalidSplit), false), // 10001
-        (&[2500, 2500, 2500, 2500], None, false), // four equal -> OK
-        (&[5001, 4999], None, false), // OK
-        (&[5001, 4998], Some(SplitError::InvalidSplit), false), // 9999
-        (&[4294967295u32, 1u32], Some(SplitError::ArithmeticOverflow), false), // u32 max overflow
-        (&[4294967295u32, 4294967295u32], Some(SplitError::ArithmeticOverflow), false), // double max
+        (&[6000, 3000], Some(SplitError::InvalidSplit), false),   // sums to 9000
+        (&[6000, 4001], Some(SplitError::InvalidSplit), false),   // 10001
+        (&[3333, 3333, 3334], None, false),                       // three-way equal-ish -> OK
+        (&[10000, 0], Some(SplitError::ZeroShare), false),        // zero share present
+        (&[5000, 5000, 0], Some(SplitError::ZeroShare), false),   // zero among many
+        (&[1, 9999], None, false),                                // edge exact 10000
+        (&[2, 9999], Some(SplitError::InvalidSplit), false),      // 10001
+        (&[2500, 2500, 2500, 2500], None, false),                 // four equal -> OK
+        (&[5001, 4999], None, false),                             // OK
+        (&[5001, 4998], Some(SplitError::InvalidSplit), false),   // 9999
+        (
+            &[4294967295u32, 1u32],
+            Some(SplitError::ArithmeticOverflow),
+            false,
+        ), // u32 max overflow
+        (
+            &[4294967295u32, 4294967295u32],
+            Some(SplitError::ArithmeticOverflow),
+            false,
+        ), // double max
         (&[10000, 0, 0], Some(SplitError::ZeroShare), false),
         (&[4000, 4000, 2000], None, false), // OK
         (&[4000, 4000, 1999], Some(SplitError::InvalidSplit), false),
@@ -1704,8 +1718,21 @@ fn test_basis_points_invariant_table() {
         );
 
         match expected_err {
-            None => assert_eq!(result, Ok(Ok(())), "case {} expected success but got {:?}", i, result),
-            Some(err) => assert_eq!(result, Err(Ok(*err)), "case {} expected {:?} but got {:?}", i, err, result),
+            None => assert_eq!(
+                result,
+                Ok(Ok(())),
+                "case {} expected success but got {:?}",
+                i,
+                result
+            ),
+            Some(err) => assert_eq!(
+                result,
+                Err(Ok(*err)),
+                "case {} expected {:?} but got {:?}",
+                i,
+                err,
+                result
+            ),
         }
     }
 }
@@ -2162,13 +2189,25 @@ fn test_pause_and_unpause_emit_events() {
 
     let pause_event = events.get(before_count).unwrap().clone();
     assert_eq!(pause_event.0, contract_id);
-    assert_eq!(Symbol::from_val(&env, &pause_event.1.get(0).unwrap()), Symbol::new(&env, "distributions_paused"));
-    assert_eq!(Address::from_val(&env, &pause_event.1.get(1).unwrap()), admin.clone());
+    assert_eq!(
+        Symbol::from_val(&env, &pause_event.1.get(0).unwrap()),
+        Symbol::new(&env, "distributions_paused")
+    );
+    assert_eq!(
+        Address::from_val(&env, &pause_event.1.get(1).unwrap()),
+        admin.clone()
+    );
 
     let unpause_event = events.get(before_count + 1).unwrap().clone();
     assert_eq!(unpause_event.0, contract_id);
-    assert_eq!(Symbol::from_val(&env, &unpause_event.1.get(0).unwrap()), Symbol::new(&env, "distributions_unpaused"));
-    assert_eq!(Address::from_val(&env, &unpause_event.1.get(1).unwrap()), admin.clone());
+    assert_eq!(
+        Symbol::from_val(&env, &unpause_event.1.get(0).unwrap()),
+        Symbol::new(&env, "distributions_unpaused")
+    );
+    assert_eq!(
+        Address::from_val(&env, &unpause_event.1.get(1).unwrap()),
+        admin.clone()
+    );
 }
 
 #[test]
@@ -3448,13 +3487,13 @@ fn test_transfer_ownership_emits_event() {
     // Consume events before the transfer so we can check for a new one.
     let before_count = env.events().all().len();
     client.transfer_project_ownership(&project_id, &owner, &new_owner);
-    
+
     let events = env.events().all();
     assert!(events.len() > before_count);
-    
+
     let last_event = events.last().unwrap().clone();
     assert_eq!(last_event.0, contract_id);
-    
+
     // Assert event topics: ["ownership_transferred", project_id]
     assert_eq!(
         Symbol::try_from_val(&env, &last_event.1.get(0).unwrap()).unwrap(),
@@ -3464,7 +3503,7 @@ fn test_transfer_ownership_emits_event() {
         Symbol::try_from_val(&env, &last_event.1.get(1).unwrap()).unwrap(),
         project_id
     );
-    
+
     // Assert event data body: (previous_owner, new_owner)
     let data: (Address, Address) = last_event.2.try_into_val(&env).unwrap();
     assert_eq!(data.0, owner);
@@ -3485,7 +3524,7 @@ fn test_sequential_distribute_accumulates_total_distributed() {
     let client = SplitNairaContractClient::new(&env, &contract_id);
 
     let alice = Address::generate(&env);
-    let bob   = Address::generate(&env);
+    let bob = Address::generate(&env);
     let collaborators = make_collaborators(
         &env,
         vec![&env, alice.clone(), bob.clone()],
@@ -3515,13 +3554,18 @@ fn test_sequential_distribute_accumulates_total_distributed() {
     client.distribute(&project_id);
     let s2 = client.get_project(&project_id).unwrap();
     assert_eq!(s2.distribution_round, 2, "round should be 2");
-    assert_eq!(s2.total_distributed, 1_500,
-        "lost-write would give 500 not 1500 - proves no concurrent overwrite");
+    assert_eq!(
+        s2.total_distributed, 1_500,
+        "lost-write would give 500 not 1500 - proves no concurrent overwrite"
+    );
 
     let alice_claimed = client.get_claimed(&project_id, &alice);
-    let bob_claimed   = client.get_claimed(&project_id, &bob);
-    assert_eq!(alice_claimed + bob_claimed, 1_500,
-        "per-collaborator claimed must equal total_distributed");
+    let bob_claimed = client.get_claimed(&project_id, &bob);
+    assert_eq!(
+        alice_claimed + bob_claimed,
+        1_500,
+        "per-collaborator claimed must equal total_distributed"
+    );
 }
 
 // ==========================================================
@@ -3559,7 +3603,7 @@ fn test_create_project_accepts_title_at_limit() {
     let contract_id = env.register_contract(None, SplitNairaContract);
     let client = SplitNairaContractClient::new(&env, &contract_id);
     let alice = Address::generate(&env);
-    let bob   = Address::generate(&env);
+    let bob = Address::generate(&env);
     let collaborators = make_collaborators(
         &env,
         vec![&env, alice.clone(), bob.clone()],
@@ -3645,19 +3689,19 @@ fn test_collaborator_accepts_alias_at_limit() {
     let contract_id = env.register_contract(None, SplitNairaContract);
     let client = SplitNairaContractClient::new(&env, &contract_id);
     let alice = Address::generate(&env);
-    let bob   = Address::generate(&env);
+    let bob = Address::generate(&env);
     // Exactly 100 characters — must succeed
     let ok_alias = String::from_str(&env, &"c".repeat(100));
     let mut collabs = Vec::new(&env);
     collabs.push_back(Collaborator {
-        address:      alice.clone(),
+        address: alice.clone(),
         basis_points: 5_000,
-        alias:        ok_alias,
+        alias: ok_alias,
     });
     collabs.push_back(Collaborator {
-        address:      bob.clone(),
+        address: bob.clone(),
         basis_points: 5_000,
-        alias:        String::from_str(&env, "Bob"),
+        alias: String::from_str(&env, "Bob"),
     });
     client.create_project(
         &token_admin,
@@ -3743,7 +3787,10 @@ fn test_claim_reduces_project_balance() {
 
     // Remaining balance should be 4_000_000 (bob's half)
     let remaining = client.get_balance(&project_id);
-    assert_eq!(remaining, 4_000_000, "project balance must be reduced by alice's claimed share");
+    assert_eq!(
+        remaining, 4_000_000,
+        "project balance must be reduced by alice's claimed share"
+    );
 }
 
 #[test]
@@ -4207,9 +4254,7 @@ fn test_migrate_flat_to_buckets() {
         let mut flat = Vec::new(&env);
         flat.push_back(id_a.clone());
         flat.push_back(id_b.clone());
-        env.storage()
-            .persistent()
-            .set(&DataKey::ProjectIds, &flat);
+        env.storage().persistent().set(&DataKey::ProjectIds, &flat);
         env.storage()
             .persistent()
             .set(&DataKey::ProjectIdsBucketCount, &0u32);
@@ -4302,7 +4347,14 @@ fn test_batch_distribute_fails_when_paused_batch() {
     );
 
     let project_a = Symbol::new(&env, "project_a");
-    client.create_project(&owner, &project_a, &String::from_str(&env, "Project A"), &String::from_str(&env, "music"), &token, &collabs);
+    client.create_project(
+        &owner,
+        &project_a,
+        &String::from_str(&env, "Project A"),
+        &String::from_str(&env, "music"),
+        &token,
+        &collabs,
+    );
     deposit_to_project(&env, &client, &token, &project_a, &funder, 100_0000000i128);
 
     let admin = Address::generate(&env);
@@ -4311,7 +4363,7 @@ fn test_batch_distribute_fails_when_paused_batch() {
 
     let batch = Vec::from_slice(&env, &[project_a.clone()]);
     let result = client.try_batch_distribute(&batch);
-    
+
     assert_eq!(result, Err(Ok(SplitError::DistributionsPaused)));
 }
 
@@ -4493,14 +4545,7 @@ fn test_update_collaborators_after_partial_payout() {
     assert_eq!(token_balance.balance(&bob), 400_0000000i128);
     assert_eq!(client.get_balance(&project_id), 0);
 
-    deposit_to_project(
-        &env,
-        &client,
-        &token,
-        &project_id,
-        &funder,
-        500_0000000i128,
-    );
+    deposit_to_project(&env, &client, &token, &project_id, &funder, 500_0000000i128);
     assert_eq!(client.get_balance(&project_id), 500_0000000i128);
 
     let updated_collabs = make_collaborators(
@@ -4518,8 +4563,14 @@ fn test_update_collaborators_after_partial_payout() {
 
     client.distribute(&project_id);
 
-    assert_eq!(token_balance.balance(&alice), 600_0000000i128 + 200_0000000i128);
-    assert_eq!(token_balance.balance(&bob), 400_0000000i128 + 150_0000000i128);
+    assert_eq!(
+        token_balance.balance(&alice),
+        600_0000000i128 + 200_0000000i128
+    );
+    assert_eq!(
+        token_balance.balance(&bob),
+        400_0000000i128 + 150_0000000i128
+    );
     assert_eq!(token_balance.balance(&carol), 150_0000000i128);
     assert_eq!(client.get_balance(&project_id), 0);
 
@@ -4595,8 +4646,14 @@ fn test_update_collaborators_after_full_payout() {
     client.distribute(&project_id);
 
     let token_balance = token::Client::new(&env, &token);
-    assert_eq!(token_balance.balance(&alice), 1_400_0000000i128 + 500_0000000i128);
-    assert_eq!(token_balance.balance(&bob), 600_0000000i128 + 300_0000000i128);
+    assert_eq!(
+        token_balance.balance(&alice),
+        1_400_0000000i128 + 500_0000000i128
+    );
+    assert_eq!(
+        token_balance.balance(&bob),
+        600_0000000i128 + 300_0000000i128
+    );
     assert_eq!(token_balance.balance(&carol), 200_0000000i128);
 
     let project = client.get_project(&project_id).unwrap();
@@ -4666,8 +4723,14 @@ fn test_update_collaborators_preserves_claimed_ledger() {
     );
     client.distribute(&project_id);
 
-    assert_eq!(client.get_claimed(&project_id, &alice), 500_0000000i128 + 400_0000000i128);
-    assert_eq!(client.get_claimed(&project_id, &bob), 500_0000000i128 + 300_0000000i128);
+    assert_eq!(
+        client.get_claimed(&project_id, &alice),
+        500_0000000i128 + 400_0000000i128
+    );
+    assert_eq!(
+        client.get_claimed(&project_id, &bob),
+        500_0000000i128 + 300_0000000i128
+    );
     assert_eq!(client.get_claimed(&project_id, &carol), 300_0000000i128);
 
     let project = client.get_project(&project_id).unwrap();
@@ -4720,13 +4783,12 @@ fn test_update_collaborators_after_payout_requires_owner_auth() {
         Vec::from_slice(&env, &[5000u32, 3000u32, 2000u32]),
     );
 
-    env.mock_auths_clear();
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
         address: &stranger,
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
             contract: &contract_id,
             fn_name: "update_collaborators",
-            args: (&project_id, &stranger, &updated_collabs).into_val(&env),
+            args: (&project_id, &stranger, updated_collabs.clone()).into_val(&env),
             sub_invokes: &[],
         },
     }]);
@@ -4807,7 +4869,9 @@ fn test_create_project_succeeds_at_exactly_maximum_collaborators() {
         &collabs,
     );
 
-    let project = client.get_project(&Symbol::new(&env, "max_collabs"));
+    let project = client
+        .get_project(&Symbol::new(&env, "max_collabs"))
+        .expect("project exists");
     assert_eq!(project.collaborators.len(), 50);
 }
 
@@ -4863,13 +4927,11 @@ fn test_update_collaborators_succeeds_at_exactly_maximum() {
 
     // Update to exactly the maximum (50).
     let at_max = make_equal_collaborators(&env, 50);
-    client.update_collaborators(
-        &Symbol::new(&env, "upd_max"),
-        &owner,
-        &at_max,
-    );
+    client.update_collaborators(&Symbol::new(&env, "upd_max"), &owner, &at_max);
 
-    let project = client.get_project(&Symbol::new(&env, "upd_max"));
+    let project = client
+        .get_project(&Symbol::new(&env, "upd_max"))
+        .expect("project exists");
     assert_eq!(project.collaborators.len(), 50);
 }
 
@@ -4901,11 +4963,7 @@ fn test_update_collaborators_fails_at_maximum_plus_one() {
     }
     let over_cap = make_collaborators(&env, addrs, bps);
 
-    let result = client.try_update_collaborators(
-        &Symbol::new(&env, "upd_over"),
-        &owner,
-        &over_cap,
-    );
+    let result = client.try_update_collaborators(&Symbol::new(&env, "upd_over"), &owner, &over_cap);
 
     // TooManyCollaborators is checked before ZeroShare / InvalidSplit.
     assert_eq!(result, Err(Ok(SplitError::TooManyCollaborators)));
@@ -4957,7 +5015,9 @@ fn test_collaborator_alias_at_maximum_length() {
         &collabs,
     );
 
-    let project = client.get_project(&Symbol::new(&env, "max_alias"));
+    let project = client
+        .get_project(&Symbol::new(&env, "max_alias"))
+        .expect("project exists");
     assert_eq!(project.collaborators.len(), 2);
     let retrieved_alias = project.collaborators.get(0).unwrap().alias.to_string();
     assert_eq!(retrieved_alias, max_alias);
@@ -4998,13 +5058,11 @@ fn test_update_collaborators_with_maximum_length_aliases() {
         },
     ];
 
-    client.update_collaborators(
-        &Symbol::new(&env, "update_alias"),
-        &owner,
-        &updated,
-    );
+    client.update_collaborators(&Symbol::new(&env, "update_alias"), &owner, &updated);
 
-    let project = client.get_project(&Symbol::new(&env, "update_alias"));
+    let project = client
+        .get_project(&Symbol::new(&env, "update_alias"))
+        .expect("project exists");
     let first_alias = project.collaborators.get(0).unwrap().alias.to_string();
     assert_eq!(first_alias.len(), 100);
     assert_eq!(first_alias, max_alias);
@@ -5097,7 +5155,11 @@ fn test_withdraw_unallocated_emits_event_snapshot() {
     let stellar_token = token::StellarAssetClient::new(&env, &token);
     stellar_token.mint(&depositor, &1000_0000000i128);
 
-    client.deposit(&Symbol::new(&env, "non_existent"), &depositor, &1000_0000000i128);
+    // Direct transfers into the contract address create *unallocated* funds —
+    // exactly what `withdraw_unallocated` exists to recover. (A `deposit`
+    // would be accounted to a project instead, and requires the project to
+    // exist.)
+    token::Client::new(&env, &token).transfer(&depositor, &contract_id, &1000_0000000i128);
 
     let events_before = env.events().all();
     let before_count = events_before.len();
@@ -5105,7 +5167,10 @@ fn test_withdraw_unallocated_emits_event_snapshot() {
     client.withdraw_unallocated(&admin, &token, &withdrawer, &500_0000000i128);
 
     let events_after = env.events().all();
-    assert!(events_after.len() > before_count, "Event should be emitted on withdrawal");
+    assert!(
+        events_after.len() > before_count,
+        "Event should be emitted on withdrawal"
+    );
 }
 
 #[test]
@@ -5123,13 +5188,19 @@ fn test_withdraw_unallocated_correct_balance_after_event() {
     let stellar_token = token::StellarAssetClient::new(&env, &token);
     stellar_token.mint(&depositor, &1000_0000000i128);
 
-    client.deposit(&Symbol::new(&env, "unalloc_1"), &depositor, &1000_0000000i128);
+    // Unallocated funds come from direct transfers into the contract address;
+    // deposits are accounted to a project and are *not* withdrawable here.
+    token::Client::new(&env, &token).transfer(&depositor, &contract_id, &1000_0000000i128);
 
     assert_eq!(client.get_unallocated_balance(&token), 1000_0000000i128);
 
     client.withdraw_unallocated(&admin, &token, &withdrawer, &300_0000000i128);
 
     assert_eq!(client.get_unallocated_balance(&token), 700_0000000i128);
+    assert_eq!(
+        token::Client::new(&env, &token).balance(&withdrawer),
+        300_0000000i128
+    );
 }
 
 // ============================================================
@@ -5147,11 +5218,10 @@ fn test_allowlist_add_token_extends_ttl() {
 
     let new_token = Address::generate(&env);
 
-    client.add_allowed_token(&admin, &new_token);
+    client.allow_token(&admin, &new_token);
     assert!(client.is_token_allowed(&new_token));
 
-    env.ledger()
-        .with_mut(|info| info.sequence_number += 50_000);
+    env.ledger().with_mut(|info| info.sequence_number += 50_000);
 
     assert!(client.is_token_allowed(&new_token));
 }
@@ -5168,14 +5238,13 @@ fn test_allowlist_get_tokens_maintains_ttl() {
     let token1 = Address::generate(&env);
     let token2 = Address::generate(&env);
 
-    client.add_allowed_token(&admin, &token1);
-    client.add_allowed_token(&admin, &token2);
+    client.allow_token(&admin, &token1);
+    client.allow_token(&admin, &token2);
 
     let allowed = client.get_allowed_tokens(&0, &10);
     assert_eq!(allowed.len(), 2);
 
-    env.ledger()
-        .with_mut(|info| info.sequence_number += 75_000);
+    env.ledger().with_mut(|info| info.sequence_number += 75_000);
 
     let allowed_after = client.get_allowed_tokens(&0, &10);
     assert_eq!(allowed_after.len(), 2);
@@ -5194,9 +5263,9 @@ fn test_allowlist_persistence_across_ledger_advance() {
     let token2 = Address::generate(&env);
     let token3 = Address::generate(&env);
 
-    client.add_allowed_token(&admin, &token1);
-    client.add_allowed_token(&admin, &token2);
-    client.add_allowed_token(&admin, &token3);
+    client.allow_token(&admin, &token1);
+    client.allow_token(&admin, &token2);
+    client.allow_token(&admin, &token3);
 
     let allowed_before = client.get_allowed_tokens(&0, &10);
     assert_eq!(allowed_before.len(), 3);

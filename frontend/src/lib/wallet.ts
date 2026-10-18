@@ -3,7 +3,11 @@
 import { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
 
 
-export { createSorobanRpcServer, submitSorobanTransactionAndPoll } from "./soroban-transaction";
+export {
+  createSorobanRpcServer,
+  sendSorobanTransaction,
+  submitSorobanTransactionAndPoll,
+} from "./soroban-transaction";
 
 export interface WalletState {
   connected: boolean;

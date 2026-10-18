@@ -53,6 +53,18 @@ import {
   AdminUnsignedXdrResponseSchema,
 } from "../schemas/admin.schemas.js";
 import { withResponseValidation } from "../middleware/validateResponse.js";
+import {
+  claimableInfoSchema,
+  contractBoolSchema,
+  contractU32Schema,
+  getEventsResponseSchema,
+  stroopAmountSchema,
+} from "../schemas/stellar-rpc.schemas.js";
+import {
+  decodeContractValue,
+  parseRpcResponse,
+  readSimulationRetval,
+} from "../services/rpc-response-validation.js";
 
 import {
   buildHistoryTopicFilters,
@@ -247,7 +259,9 @@ splitsRouter.get("/", async (req: Request, res: Response, next: NextFunction) =>
 
     const projects = await listProjects(start, limit, search, type);
     const totalRetval = await simulateReadOnlyContractCall("get_project_count");
-    const total = totalRetval ? Number(scValToNative(totalRetval)) : projects.length;
+    const total = totalRetval
+      ? decodeContractValue("simulateTransaction:get_project_count", contractU32Schema, totalRetval)
+      : projects.length;
 
     return res.status(200).json(
       serializeBigInts({
@@ -376,7 +390,13 @@ splitsRouter.get(
           ]);
 
           const adminValue = adminRetval ? scValToNative(adminRetval) : null;
-          const countValue = countRetval ? scValToNative(countRetval) : 0;
+          const countValue = countRetval
+            ? decodeContractValue(
+                "simulateTransaction:get_allowed_token_count",
+                contractU32Schema,
+                countRetval
+              )
+            : 0;
           const tokensValue = tokensRetval ? scValToNative(tokensRetval) : [];
 
           return res
@@ -578,7 +598,13 @@ splitsRouter.post(
 
       try {
         const pausedRetval = await simulateReadOnlyContractCall("is_distributions_paused");
-        const isPaused = pausedRetval ? Boolean(scValToNative(pausedRetval)) : false;
+        const isPaused = pausedRetval
+          ? decodeContractValue(
+              "simulateTransaction:is_distributions_paused",
+              contractBoolSchema,
+              pausedRetval
+            )
+          : false;
         if (isPaused) {
           return res.status(409).json({
             error: "distributions_paused",
@@ -669,15 +695,20 @@ splitsRouter.get(
         throw translateSorobanError(error);
       }
 
-      const retval = "result" in simulated ? simulated.result?.retval : undefined;
+      const retval = readSimulationRetval("get_claimable", simulated);
       if (!retval) {
         return sendRpcError(res, requestId, "RPC operation failed.");
       }
+      const claimable = decodeContractValue(
+        "simulateTransaction:get_claimable",
+        claimableInfoSchema,
+        retval
+      );
 
       return res.status(200).json({
         projectId,
         address,
-        claimable: serializeBigInts(scValToNative(retval)),
+        claimable: serializeBigInts(claimable),
       });
     } catch (error) {
       return next(error);
@@ -868,7 +899,7 @@ splitsRouter.get("/:projectId/history", async (req: Request, res: Response, next
 
     const { topicProjectId, roundTopic, paymentTopic } = buildHistoryTopicFilters(projectId);
 
-    const roundEventResponse = await executeWithRetry(
+    const rawRoundEventResponse = await executeWithRetry(
       () =>
         server.getEvents({
           cursor,
@@ -884,7 +915,7 @@ splitsRouter.get("/:projectId/history", async (req: Request, res: Response, next
       { operation: "getEvents" }
     );
 
-    const paymentEventResponse = await executeWithRetry(
+    const rawPaymentEventResponse = await executeWithRetry(
       () =>
         server.getEvents({
           cursor,
@@ -898,6 +929,17 @@ splitsRouter.get("/:projectId/history", async (req: Request, res: Response, next
           limit,
         }),
       { operation: "getEvents" }
+    );
+
+    const roundEventResponse = parseRpcResponse(
+      "getEvents",
+      getEventsResponseSchema,
+      rawRoundEventResponse
+    );
+    const paymentEventResponse = parseRpcResponse(
+      "getEvents",
+      getEventsResponseSchema,
+      rawPaymentEventResponse
     );
 
     const events = [
@@ -926,13 +968,7 @@ splitsRouter.get("/:projectId/history", async (req: Request, res: Response, next
     ].sort((a, b) => b.ledgerCloseTime.localeCompare(a.ledgerCloseTime));
 
     // Prefer the server-provided pagination cursor when available
-    const nextCursor =
-      // soroban-rpc getEvents commonly returns `cursor` for pagination
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ((roundEventResponse as any)?.cursor as string | undefined) ||
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ((paymentEventResponse as any)?.cursor as string | undefined) ||
-      null;
+    const nextCursor = roundEventResponse.cursor || paymentEventResponse.cursor || null;
 
     return res.status(200).json({
       items: serializeBigInts(events),
@@ -961,7 +997,13 @@ splitsRouter.get(
           ]);
 
           const admin = adminRetval ? String(scValToNative(adminRetval)) : null;
-          const isPaused = pausedRetval ? Boolean(scValToNative(pausedRetval)) : false;
+          const isPaused = pausedRetval
+            ? decodeContractValue(
+                "simulateTransaction:is_distributions_paused",
+                contractBoolSchema,
+                pausedRetval
+              )
+            : false;
 
           return res.status(200).json({ admin, isPaused });
         } catch (error) {
@@ -1001,7 +1043,9 @@ splitsRouter.get(
           const retval = await simulateReadOnlyContractCall("is_token_allowed", [
             Address.fromString(token).toScVal(),
           ]);
-          const isAllowed = retval ? Boolean(scValToNative(retval)) : false;
+          const isAllowed = retval
+            ? decodeContractValue("simulateTransaction:is_token_allowed", contractBoolSchema, retval)
+            : false;
           return res.status(200).json({ token, isAllowed });
         } catch (error) {
           if (error instanceof RequestValidationError) {
@@ -1027,7 +1071,13 @@ splitsRouter.get(
         const requestId = res.locals.requestId;
         try {
           const retval = await simulateReadOnlyContractCall("get_allowed_token_count");
-          const count = retval ? Number(scValToNative(retval)) : 0;
+          const count = retval
+            ? decodeContractValue(
+                "simulateTransaction:get_allowed_token_count",
+                contractU32Schema,
+                retval
+              )
+            : 0;
           return res.status(200).json({ count });
         } catch (error) {
           if (error instanceof RequestValidationError) {
@@ -1070,7 +1120,13 @@ splitsRouter.get(
           const retval = await simulateReadOnlyContractCall("get_unallocated_balance", [
             Address.fromString(token).toScVal(),
           ]);
-          const unallocated = retval ? String(scValToNative(retval)) : "0";
+          const unallocated = retval
+            ? decodeContractValue(
+                "simulateTransaction:get_unallocated_balance",
+                stroopAmountSchema,
+                retval
+              ).toString()
+            : "0";
           return res.status(200).json({ token, unallocated });
         } catch (error) {
           if (error instanceof RequestValidationError) {

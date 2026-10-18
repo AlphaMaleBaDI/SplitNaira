@@ -6,6 +6,7 @@ import { TransactionRecord } from "../entities/Transaction.js";
 import { ServiceState } from "../entities/ServiceState.js";
 import { AuditLog } from "../entities/AuditLog.js";
 import { LedgerBlock } from "../entities/LedgerBlock.js";
+import { EmailVerificationToken } from "../entities/EmailVerificationToken.js";
 import { SplitCancellation } from "../entities/SplitCancellation.js";
 import { ProjectArchival } from "../entities/ProjectArchival.js";
 import { NotificationPreference } from "../entities/NotificationPreference.js";
@@ -54,7 +55,19 @@ export function createDataSource(): DataSource {
     url: databaseUrl,
     synchronize: false,
     logging: process.env.NODE_ENV === "development",
-    entities: ENTITIES,
+    entities: [
+      User,
+      TransactionRecord,
+      ServiceState,
+      AuditLog,
+      LedgerBlock,
+      SplitCancellation,
+      ProjectArchival,
+      NotificationPreference,
+      Notification,
+      ProjectEditHistory,
+      EmailVerificationToken,
+    ],
     migrations: ["src/migrations/*.ts"],
     migrationsTableName: "migrations",
     extra: {
