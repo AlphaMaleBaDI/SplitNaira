@@ -14,8 +14,10 @@ deployment secret store; do not commit credential-bearing URLs.
   request uses the next eligible configured endpoint.
 - A successful, validated response clears that endpoint's failure streak and
   quarantine.
-- If all endpoints are quarantined, the policy probes the endpoint whose
-  cooldown expires first to avoid a permanent dead end. Normal response
+- If all endpoints are quarantined, the policy fails closed with a generic
+  unavailable error until a cooldown expires; it does not send traffic to a
+  provider that is still quarantined. The existing retry budget can retry the
+  operation, and later requests can use the recovered endpoint. Normal response
   validation still applies; this is not permission to accept cached or stale data.
 - Provider health is process-local. Each backend instance tracks its own
   provider state; no external health database is required.
