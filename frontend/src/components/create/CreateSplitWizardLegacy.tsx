@@ -536,7 +536,7 @@ export function CreateSplitWizard({
               </div>
               <p className="font-mono text-xs text-muted opacity-60 break-all">{createdProject.projectId}</p>
             </div>
-            <div className="text-right space-y-1">
+            <div className="text-end space-y-1">
               <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">Available Funds</p>
               <p className="text-3xl font-display text-greenBright">
                 {Number(createdProject.balance).toLocaleString()}{" "}
@@ -547,7 +547,7 @@ export function CreateSplitWizard({
 
           <div className="mt-8 grid gap-8 md:grid-cols-2">
             <div className="space-y-4">
-              <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-muted border-l-2 border-greenBright pl-4">
+              <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-muted border-s-2 border-greenBright ps-4">
                 Collaborators
               </h4>
               <div className="space-y-2">
@@ -566,7 +566,7 @@ export function CreateSplitWizard({
             </div>
 
             <div className="space-y-4">
-              <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-muted border-l-2 border-greenBright pl-4">
+              <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-muted border-s-2 border-greenBright ps-4">
                 Project Metadata
               </h4>
               <div className="space-y-3">

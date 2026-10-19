@@ -13,6 +13,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 // ─── matchMedia mock helpers ─────────────────────────────────────────────────
 
@@ -46,19 +48,16 @@ function mockMatchMedia(reducedMotion: boolean) {
 // ─── CSS media query rules ───────────────────────────────────────────────────
 
 describe("CSS reduced-motion media query", () => {
-  it("disables slide-in and slide-out animations under prefers-reduced-motion: reduce", () => {
-    // The rule is defined in globals.css. We verify its intent by asserting the
-    // animation utility class names that the stylesheet targets are the ones
-    // used in the dashboard and transaction components.
-    const targetClasses = ["animate-slide-in", "animate-slide-out"];
+  it("shortens all animations and transitions and disables smooth scrolling", () => {
+    const stylesheet = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8");
+    const reducedMotionRules = stylesheet.match(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\n\}/,
+    )?.[1];
 
-    targetClasses.forEach((cls) => {
-      // Create a temporary element to confirm the class names are valid strings
-      // and that they match the documented CSS selector targets.
-      const el = document.createElement("div");
-      el.className = cls;
-      expect(el.classList.contains(cls)).toBe(true);
-    });
+    expect(reducedMotionRules).toBeDefined();
+    expect(reducedMotionRules).toContain("animation-duration: 0.01ms !important");
+    expect(reducedMotionRules).toContain("transition-duration: 0.01ms !important");
+    expect(reducedMotionRules).toContain("scroll-behavior: auto !important");
   });
 });
 

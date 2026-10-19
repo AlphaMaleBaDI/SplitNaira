@@ -51,9 +51,11 @@ export function MobileDrawer({ isOpen, onClose, children }: MobileDrawerProps) {
       {/* Drawer */}
       <div
         className={clsx(
-          "fixed inset-y-0 left-0 w-64 bg-[var(--brand-surface)] z-40 transform transition-transform duration-300 ease-in-out md:hidden",
-          isOpen ? "translate-x-0" : "-translate-x-full",
+          "fixed inset-y-0 start-0 w-64 bg-[var(--brand-surface)] z-40 transform transition-transform duration-300 ease-in-out md:hidden",
+          isOpen ? "translate-x-0" : "-translate-x-full rtl:translate-x-full",
         )}
+        aria-hidden={!isOpen}
+        inert={!isOpen}
       >
         {children}
       </div>

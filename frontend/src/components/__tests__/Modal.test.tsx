@@ -119,6 +119,24 @@ describe("Modal accessibility", () => {
     expect(dialog).toHaveAttribute("aria-labelledby", "modal-title");
   });
 
+  it("preserves dialog keyboard access when rendered in an RTL subtree", async () => {
+    const user = userEvent.setup();
+    render(
+      <div dir="rtl">
+        <ModalHarness />
+      </div>,
+    );
+
+    await user.click(screen.getByText("Open Dialog"));
+    const dialog = screen.getByRole("dialog", { hidden: true });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByLabelText("First input")).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+    expect(screen.getByText("Open Dialog")).toHaveFocus();
+  });
+
   it("does not render the modal markup when closed", () => {
     render(<ModalHarness initiallyOpen={false} />);
     expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();

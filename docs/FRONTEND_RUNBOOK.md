@@ -32,3 +32,23 @@ If a critical bug is found after mainnet deploy:
 - Check Vercel/hosting dashboard for build errors
 - Monitor browser console for wallet connection errors
 - Watch Stellar network for failed contract calls
+
+## Accessibility and Responsive Smoke Checks
+
+Run frontend checks from `frontend/`:
+
+```bash
+npm run test -- src/components/__tests__/useFocusTrap.test.tsx src/components/__tests__/Modal.test.tsx src/components/__tests__/MobileDrawer.test.tsx src/__tests__/reduced-motion.test.ts
+npm run check:i18n
+```
+
+Vitest coverage exercises dialog focus entry, tab containment, Escape dismissal,
+focus restoration, reduced-motion rules, and RTL direction on navigation and
+financial table markup. The currently configured locales (`en` and `fr`) are
+left-to-right; RTL checks use a synthetic `dir="rtl"` subtree so RTL layout
+behavior is covered before an RTL locale is added.
+
+Vitest runs in JSDOM and does not calculate responsive layout or horizontal
+overflow. Verify wallet connection, split creation, transaction signing, and
+history at narrow browser widths before release; these geometry checks need a
+browser-based viewport runner.

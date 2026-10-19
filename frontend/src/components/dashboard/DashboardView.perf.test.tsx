@@ -152,6 +152,21 @@ function buildBaseProps(dashboardData: SplitProject[]) {
 }
 
 describe("DashboardView performance smoke", () => {
+  it("uses logical alignment for financial table content in RTL", () => {
+    const project = buildLargeDashboardFixture(1);
+    render(
+      <div dir="rtl">
+        <DashboardView {...buildBaseProps(project)} />
+      </div>,
+    );
+
+    const table = screen.getByRole("table");
+    expect(table).toHaveClass("text-start");
+    expect(screen.getByRole("columnheader", { name: "Balance" })).toHaveClass("text-end");
+    expect(screen.getByRole("columnheader", { name: "Rounds" })).toHaveClass("text-end", "pe-4");
+    expect(screen.getByText("Project 0").closest("td")).toHaveClass("ps-4");
+  });
+
   it(`renders ${FIXTURE_SIZE} projects within a generous time budget and without truncating data`, () => {
     const props = buildBaseProps(largeFixture);
 

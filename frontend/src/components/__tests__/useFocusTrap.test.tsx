@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { useRef, useState } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -20,7 +20,7 @@ function TrapHost({
   return (
     <div>
       <button type="button">Outside trigger</button>
-      <div ref={ref} role="dialog" aria-label="Trap subject">
+      <div ref={ref} role="dialog" aria-label="Trap subject" tabIndex={-1}>
         {withFocusables ? (
           <>
             <button type="button">First</button>
@@ -72,6 +72,16 @@ describe("useFocusTrap", () => {
     expect(screen.getByText("First")).toHaveFocus();
     await user.tab({ shift: true });
     expect(screen.getByText("Third")).toHaveFocus();
+  });
+
+  it("returns focus to the trap when Tab is pressed after focus escapes", () => {
+    render(<TrapHost />);
+    const outsideTrigger = screen.getByText("Outside trigger");
+    outsideTrigger.focus();
+
+    fireEvent.keyDown(document, { key: "Tab" });
+
+    expect(screen.getByText("First")).toHaveFocus();
   });
 
   it("does not trap focus when the open flag is false", async () => {

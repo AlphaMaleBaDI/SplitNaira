@@ -37,6 +37,13 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, isOpen: boolean
 
       const firstEl = elements[0];
       const lastEl = elements[elements.length - 1];
+      const activeElement = document.activeElement;
+
+      if (!modal.contains(activeElement)) {
+        e.preventDefault();
+        (e.shiftKey ? lastEl : firstEl).focus();
+        return;
+      }
 
       if (e.shiftKey) {
         if (document.activeElement === firstEl || document.activeElement === modal) {
