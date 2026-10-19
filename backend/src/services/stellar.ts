@@ -101,6 +101,91 @@ export class RpcTimeoutError extends RpcError {
   }
 }
 
+/**
+ * User-facing recovery steps for a sequence conflict (issue #1497).
+ *
+ * Deliberately actionable rather than diagnostic: the caller cannot fix this by
+ * retrying, so the message has to say what to do instead. A generic "failed" here
+ * invites exactly the retry loop this issue is about.
+ */
+export const SEQUENCE_RECOVERY_INSTRUCTIONS =
+  "This account has activity the pending transaction did not account for. " +
+  "Reload the account, then re-sign and resubmit. Retrying the same signed " +
+  "transaction will fail again.";
+
+/**
+ * Stellar error codes that a retry cannot fix.
+ *
+ * `tx_bad_seq` is the sequence conflict: the envelope is signed over a sequence
+ * number the network has already moved past, so every attempt sends the same
+ * stale bytes. The rest are protocol-level rejections that fail identically each
+ * attempt.
+ *
+ * Matching is on the stable machine-readable code rather than message text,
+ * because RPC error strings are not a stable interface.
+ */
+const TERMINAL_TX_ERROR_CODES: ReadonlySet<string> = new Set([
+  "tx_bad_seq",
+  "tx_failed",
+  "tx_insufficient_fee",
+  "tx_insufficient_balance",
+  "tx_malformed",
+  "tx_no_account",
+  "tx_too_early",
+  "tx_too_late",
+  "tx_bad_auth",
+  "tx_missing_operation",
+  "tx_missing_required_fee",
+  "tx_not_enough_signature_weight",
+  "tx_bad_sponsorship",
+  "tx_bad_min_seq_ledger_gap"
+]);
+
+/**
+ * True when `error` is a transaction rejection that retrying cannot fix.
+ *
+ * Examines the error itself, its `cause`, and the `resultCode` / `errorResult`
+ * fields, because the SDK surfaces the same rejection through different shapes
+ * depending on whether it came from `simulateTransaction`, `sendTransaction`, or
+ * a polled ledger result. Checking only one of them would let a sequence conflict
+ * slip through as retryable depending on the call site.
+ */
+export function isTerminalTransactionError(error: unknown): boolean {
+  if (error === null || error === undefined) return false;
+
+  if (typeof error === "string") {
+    return TERMINAL_TX_ERROR_CODES.has(error);
+  }
+
+  if (typeof error !== "object") return false;
+
+  const candidate = error as {
+    cause?: unknown;
+    resultCode?: unknown;
+    resultCodes?: unknown;
+    errorResult?: unknown;
+  };
+
+  for (const value of [
+    candidate.resultCode,
+    candidate.resultCodes,
+    candidate.errorResult
+  ]) {
+    if (typeof value === "string" && TERMINAL_TX_ERROR_CODES.has(value)) {
+      return true;
+    }
+  }
+
+  return isTerminalTransactionError(candidate.cause);
+}
+
+/** Wraps a terminal transaction rejection with recovery guidance. */
+export function toTerminalTransactionError(error: unknown): RpcError {
+  const detail =
+    error instanceof Error ? sanitizeRpcErrorMessage(error.message) : "rejected";
+  return new RpcError(`${detail} ${SEQUENCE_RECOVERY_INSTRUCTIONS}`, 409);
+}
+
 export interface RetryOptions {
   maxRetries?: number;
   initialDelayMs?: number;
@@ -210,6 +295,25 @@ export async function executeWithRetry<T>(
         recordRpcRetryOutcome(operationLabel, "validation_error", endpoint);
         recordRpcRetryBudget(operationLabel, endpoint, maxRetries, attempt, false);
         throw error;
+      }
+
+      // Issue #1497: don't retry rejections a retry cannot fix. A sequence
+      // conflict in particular is terminal \u2014 the envelope is signed over a
+      // sequence number the network has moved past, so every attempt resends the
+      // same stale bytes. Retrying burns the whole budget and delays the caller's
+      // recovery instruction by 1s + 2s + 4s + ... to reach the same rejection.
+      if (isTerminalTransactionError(error)) {
+        logger.warn("RPC transaction rejected terminally, not retrying", {
+          operation: operationLabel,
+          endpoint,
+          attempt: attempt + 1,
+          maxRetries,
+          errorKind,
+          errorMessage: safeMessage
+        });
+        recordRpcRetryOutcome(operationLabel, "validation_error", endpoint);
+        recordRpcRetryBudget(operationLabel, endpoint, maxRetries, attempt, false);
+        throw toTerminalTransactionError(error);
       }
 
       if (attempt < maxRetries) {
