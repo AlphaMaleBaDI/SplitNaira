@@ -12,9 +12,9 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
   error?: string;
   /** Helper text rendered below the input (shown only when there is no error) */
   hint?: string;
-  /** Leading icon or adornment rendered inside the input at inline-start */
+  /** Leading icon or adornment rendered inside the input on the left */
   leading?: React.ReactNode;
-  /** Trailing icon or adornment rendered inside the input at inline-end */
+  /** Trailing icon or adornment rendered inside the input on the right */
   trailing?: React.ReactNode;
   size?: InputSize;
   fullWidth?: boolean;
@@ -68,7 +68,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           )}
         >
           {leading && (
-            <span className="pointer-events-none ps-3 text-gray-400">{leading}</span>
+            <span className="pointer-events-none pl-3 text-gray-400">{leading}</span>
           )}
           <input
             ref={ref}
@@ -82,14 +82,14 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
               "flex-1 bg-transparent outline-none placeholder-gray-400",
               "disabled:cursor-not-allowed",
               input,
-              leading && "ps-1.5",
-              trailing && "pe-1.5",
+              leading && "pl-1.5",
+              trailing && "pr-1.5",
               className,
             )}
             {...props}
           />
           {trailing && (
-            <span className="pointer-events-none pe-3 text-gray-400">{trailing}</span>
+            <span className="pointer-events-none pr-3 text-gray-400">{trailing}</span>
           )}
         </div>
         {hasError && (

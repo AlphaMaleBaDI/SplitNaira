@@ -1,6 +1,6 @@
 "use client";
 
-import { motion, AnimatePresence, useReducedMotion, type Variants } from "framer-motion";
+import { motion, AnimatePresence, type Variants } from "framer-motion";
 import { type ReactNode } from "react";
 
 const pageVariants: Variants = {
@@ -15,16 +15,14 @@ interface PageTransitionProps {
 }
 
 export function PageTransition({ children, motionKey }: PageTransitionProps) {
-  const shouldReduceMotion = useReducedMotion();
-
   return (
     <AnimatePresence mode="wait">
       <motion.div
         key={motionKey}
-        initial={shouldReduceMotion ? false : "hidden"}
+        initial="hidden"
         animate="visible"
         exit="exit"
-        variants={shouldReduceMotion ? undefined : pageVariants}
+        variants={pageVariants}
       >
         {children}
       </motion.div>

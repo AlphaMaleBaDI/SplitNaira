@@ -1,6 +1,5 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
 import { clsx } from "clsx";
 import { sanitizeText } from "@/lib/security";
 import type { SplitProject } from "@/lib/stellar";
@@ -8,9 +7,7 @@ import type {
   TokenAllowlistState,
   UnallocatedBalanceState,
   AdminStatusState,
-  IdempotencyStats,
 } from "@/lib/api";
-import { getIdempotencyStats } from "@/lib/api";
 import type { WalletState } from "@/lib/wallet";
 import { SummaryCardSkeleton, Skeleton } from "../Skeleton";
 import { ProjectCard } from "../ProjectCard";
@@ -65,13 +62,6 @@ interface DashboardViewProps {
   setActiveTab: (tab: "dashboard" | "create" | "manage" | "projects") => void;
   setSearchProjectId: (val: string) => void;
   setFetchedProject: (p: SplitProject | null) => void;
-  /**
-   * Builds a network-correct Stellar explorer link for a transaction hash.
-   * Always the centralized `lib/explorer.ts` helper (via `lib/stellar.ts`)
-   * — never a hardcoded domain — so a mainnet tx doesn't render a testnet
-   * link (#1331).
-   */
-  getExplorerUrl: (hash: string, network: string | null) => string | null;
 }
 
 export function DashboardView({
@@ -115,31 +105,7 @@ export function DashboardView({
   isSubmittingRecovery,
   onConfirmRecovery,
   lastRecoveryTxHash,
-  getExplorerUrl,
 }: DashboardViewProps) {
-  // ── Idempotency stats polling ────────────────────────────────────────────
-  const [idempotencyStats, setIdempotencyStats] =
-    useState<IdempotencyStats | null>(null);
-  const [idempotencyError, setIdempotencyError] = useState<string | null>(null);
-
-  const fetchIdempotencyStats = useCallback(async () => {
-    try {
-      const stats = await getIdempotencyStats();
-      setIdempotencyStats(stats);
-      setIdempotencyError(null);
-    } catch {
-      setIdempotencyError("Failed to load idempotency stats");
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchIdempotencyStats();
-    const interval = setInterval(() => {
-      void fetchIdempotencyStats();
-    }, 15_000);
-    return () => clearInterval(interval);
-  }, [fetchIdempotencyStats]);
-
   return (
     <div className="space-y-10 animate-in fade-in duration-700">
       <div className="grid gap-6 md:grid-cols-3">
@@ -189,8 +155,6 @@ export function DashboardView({
             <SummaryCardSkeleton />
           </div>
         ) : (
-          <>
-          <div className="glass-card rounded-[2.5rem] p-8 md:p-10 border border-greenBright/10">
           <div className="flex flex-wrap items-start justify-between gap-6">
             <div className="space-y-1">
               <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-greenBright/80">
@@ -305,7 +269,7 @@ export function DashboardView({
                         Tx: {lastAllowlistTx.txHash}
                       </p>
                       <a
-                        href={getExplorerUrl(lastAllowlistTx.txHash, wallet.network) ?? undefined}
+                        href={`https://stellar.expert/explorer/testnet/tx/${lastAllowlistTx.txHash}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-block pt-1 text-[10px] font-bold text-greenBright underline underline-offset-4 hover:text-white"
@@ -492,7 +456,7 @@ export function DashboardView({
                 <p className="text-[10px] font-bold uppercase tracking-widest text-greenBright mb-2">Recovery Submitted</p>
                 <p className="font-mono text-[11px] text-muted break-all">Tx: {lastRecoveryTxHash}</p>
                 <a
-                  href={getExplorerUrl(lastRecoveryTxHash, wallet.network) ?? undefined}
+                  href={`https://stellar.expert/explorer/testnet/tx/${lastRecoveryTxHash}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-2 inline-block text-[10px] font-bold text-greenBright underline underline-offset-4 hover:text-white"
@@ -503,7 +467,7 @@ export function DashboardView({
             )}
           </div>
         </div>
-      ))}
+      )}
 
       {/* Issue #165: Distribution Pause Control Plane */}
       {wallet.connected && isContractAdmin && (
@@ -581,7 +545,7 @@ export function DashboardView({
               <p className="text-[10px] font-bold uppercase tracking-widest text-greenBright mb-2">Transaction Submitted</p>
               <p className="font-mono text-[11px] text-muted break-all">Tx: {lastPauseTxHash}</p>
               <a
-                href={getExplorerUrl(lastPauseTxHash, wallet.network) ?? undefined}
+                href={`https://stellar.expert/explorer/testnet/tx/${lastPauseTxHash}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="mt-2 inline-block text-[10px] font-bold text-greenBright underline underline-offset-4 hover:text-white"
@@ -591,7 +555,7 @@ export function DashboardView({
             </div>
           )}
         </div>
-      ))}
+      )}
 
       {/* User Earnings Section */}
       {wallet.connected && (
@@ -606,10 +570,10 @@ export function DashboardView({
                 <h2 className="font-display text-2xl tracking-tight">Your Cumulative Earnings</h2>
                 <p className="text-sm text-muted">Aggregate revenue share across all active contracts.</p>
               </div>
-              <div className="text-end">
+              <div className="text-right">
                 <p className="text-4xl font-display text-greenBright">
                   {Object.values(userEarnings).reduce((sum, val) => sum + Number(val), 0).toLocaleString()}
-                  <span className="text-sm font-sans opacity-40 ms-2">Stroops</span>
+                  <span className="text-sm font-sans opacity-40 ml-2">Stroops</span>
                 </p>
               </div>
             </div>
@@ -621,7 +585,6 @@ export function DashboardView({
                     key={p.projectId}
                     project={p}
                     userEarnings={userEarnings[p.projectId]}
-                    distributionPaused={adminStatus?.isPaused === true}
                   />
                 ))}
             </div>
@@ -629,98 +592,47 @@ export function DashboardView({
         )
       )}
 
-      {/* Idempotency Conflicts Panel — Issue #1165 */}
-      {wallet.connected && isContractAdmin && (
-        <div className="glass-card rounded-[2.5rem] p-8 md:p-10 border border-purple-500/10">
-          <div className="flex flex-wrap items-start justify-between gap-6 mb-8">
-            <div className="space-y-1">
-              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-purple-400/80">
-                Ops Observability
-              </p>
-              <h2 className="font-display text-2xl tracking-tight">Idempotency Conflict Counts</h2>
-              <p className="max-w-2xl text-sm text-muted">
-                Live counters for idempotency 409 conflicts (payload mismatch or in-flight) and cached replays. Refreshes every 15 seconds.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => { void fetchIdempotencyStats(); }}
-              className="premium-button rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-muted hover:text-ink"
-            >
-              Refresh
-            </button>
-          </div>
-
-          {idempotencyError ? (
-            <p className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-              {idempotencyError}
-            </p>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-3xl border border-white/5 bg-white/2 p-6">
-                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">409 Conflicts</p>
-                <p className="mt-3 text-4xl font-display text-red-400">
-                  {idempotencyStats ? idempotencyStats.conflictsTotal.toLocaleString() : "—"}
-                </p>
-                <p className="mt-1 text-xs text-muted">
-                  Payload mismatch or in-progress rejection
-                </p>
-              </div>
-              <div className="rounded-3xl border border-white/5 bg-white/2 p-6">
-                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">Cached Replays</p>
-                <p className="mt-3 text-4xl font-display text-greenBright">
-                  {idempotencyStats ? idempotencyStats.replaysTotal.toLocaleString() : "—"}
-                </p>
-                <p className="mt-1 text-xs text-muted">
-                  Cached responses returned for duplicate requests
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Performance Rollups */}
       <div className="glass-card rounded-[2.5rem] p-8 md:p-10">
         <h2 className="font-display text-2xl tracking-tight mb-8">Project Performance Rollups</h2>
         <div className="overflow-x-auto">
-          <table className="w-full text-start">
+          <table className="w-full text-left">
             <thead>
               <tr className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted border-b border-white/5">
-                <th className="pb-4 ps-4">Project</th>
+                <th className="pb-4 pl-4">Project</th>
                 <th className="pb-4">Category</th>
-                <th className="pb-4 text-end">Balance</th>
-                <th className="pb-4 text-end">Distributed</th>
-                <th className="pb-4 text-end pe-4">Rounds</th>
+                <th className="pb-4 text-right">Balance</th>
+                <th className="pb-4 text-right">Distributed</th>
+                <th className="pb-4 text-right pr-4">Rounds</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
               {isLoadingDashboard
                 ? Array.from({ length: 4 }).map((_, i) => (
                     <tr key={i}>
-                      <td className="py-4 ps-4"><Skeleton variant="line" className="w-3/4" /></td>
+                      <td className="py-4 pl-4"><Skeleton variant="line" className="w-3/4" /></td>
                       <td className="py-4"><Skeleton variant="line" className="w-1/2" /></td>
-                      <td className="py-4 text-end"><Skeleton variant="line" className="w-16 ms-auto" /></td>
-                      <td className="py-4 text-end"><Skeleton variant="line" className="w-16 ms-auto" /></td>
-                      <td className="py-4 text-end pe-4"><Skeleton variant="line" className="w-8 ms-auto" /></td>
+                      <td className="py-4 text-right"><Skeleton variant="line" className="w-16 ml-auto" /></td>
+                      <td className="py-4 text-right"><Skeleton variant="line" className="w-16 ml-auto" /></td>
+                      <td className="py-4 text-right pr-4"><Skeleton variant="line" className="w-8 ml-auto" /></td>
                     </tr>
                   ))
                 : dashboardData.map((p) => (
                     <tr key={p.projectId} className="group hover:bg-white/2 transition-colors">
-                      <td className="py-4 ps-4">
+                      <td className="py-4 pl-4">
                         <p className="font-bold text-sm">{sanitizeText(p.title)}</p>
                         <p className="text-[9px] font-mono text-muted">{p.projectId}</p>
                       </td>
                       <td className="py-4">
                         <span className="rounded-full bg-white/5 px-2 py-0.5 text-[9px] font-bold uppercase">{sanitizeText(p.projectType)}</span>
                       </td>
-                      <td className="py-4 text-end font-mono text-xs text-greenBright/80">
+                      <td className="py-4 text-right font-mono text-xs text-greenBright/80">
                         {Number(p.balance).toLocaleString()}
                       </td>
-                      <td className="py-4 text-end font-mono text-xs">
+                      <td className="py-4 text-right font-mono text-xs">
                         {Number(p.totalDistributed).toLocaleString()}
                       </td>
-                      <td className="py-4 text-end font-mono text-xs pe-4">
+                      <td className="py-4 text-right font-mono text-xs pr-4">
                         {p.distributionRound}
                       </td>
                     </tr>

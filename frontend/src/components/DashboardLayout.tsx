@@ -256,7 +256,7 @@ export function DashboardLayout({
           {/* Mobile menu button */}
           <button
             onClick={() => setMobileDrawerOpen(true)}
-            className="md:hidden p-2 -ms-2 me-3 rounded-md hover:bg-white/5 transition-colors"
+            className="md:hidden p-2 -ml-2 mr-3 rounded-md hover:bg-white/5 transition-colors"
             aria-label="Open menu"
           >
             <svg

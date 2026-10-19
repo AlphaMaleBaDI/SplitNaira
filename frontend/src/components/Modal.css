@@ -29,7 +29,7 @@
 .modal-close {
   position: absolute;
   top: 1rem;
-  inset-inline-end: 1rem;
+  right: 1rem;
   background: transparent;
   border: none;
   color: #6b7280;

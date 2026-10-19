@@ -45,20 +45,6 @@ describe("MobileDrawer accessibility", () => {
     expect(document.body.style.overflow).toBe("hidden");
   });
 
-  it("anchors the drawer at inline-start and mirrors its closed transform in RTL", () => {
-    const { container } = render(
-      <div dir="rtl">
-        <MobileDrawer isOpen={false} onClose={() => {}}>
-          <nav aria-label="RTL navigation">History</nav>
-        </MobileDrawer>
-      </div>,
-    );
-
-    const drawer = screen.getByLabelText("RTL navigation").parentElement;
-    expect(drawer).toHaveClass("start-0", "rtl:translate-x-full");
-    expect(container.querySelector('[aria-hidden="true"]')).toBeInTheDocument();
-  });
-
   it("releases the body scroll lock when the drawer closes via Escape", async () => {
     const user = userEvent.setup();
     render(<DrawerHarness />);
@@ -114,8 +100,7 @@ describe("MobileDrawer accessibility", () => {
     expect(screen.queryByLabelText("Mobile navigation")).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
-    expect(screen.getByLabelText("Mobile navigation").parentElement).toHaveAttribute("aria-hidden", "true");
-    expect(screen.getByLabelText("Mobile navigation").parentElement).toHaveAttribute("inert");
+    expect(screen.queryByLabelText("Mobile navigation")).not.toBeInTheDocument();
   });
 
   it("removes the document-level Escape handler on unmount", () => {

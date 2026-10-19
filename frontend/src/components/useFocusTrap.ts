@@ -1,15 +1,12 @@
-import { useLayoutEffect, type RefObject } from "react";
+import { useEffect, type RefObject } from "react";
 
 export function useFocusTrap(ref: RefObject<HTMLElement | null>, isOpen: boolean) {
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!isOpen || !ref.current) return;
 
     const modal = ref.current;
-    const previousTabIndex = modal.getAttribute("tabindex");
-    if (previousTabIndex === null) {
-      modal.setAttribute("tabindex", "-1");
-    }
-
+    
+    // Find all focusable elements
     const getFocusableElements = () => {
       return Array.from(
         modal.querySelectorAll<HTMLElement>(
@@ -18,6 +15,7 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, isOpen: boolean
       ).filter((el) => el.getAttribute("tabindex") !== "-1");
     };
 
+    // Auto-focus the first element
     const focusable = getFocusableElements();
     if (focusable.length > 0) {
       focusable[0].focus();
@@ -31,39 +29,30 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, isOpen: boolean
       const elements = getFocusableElements();
       if (elements.length === 0) {
         e.preventDefault();
-        modal.focus();
         return;
       }
 
       const firstEl = elements[0];
       const lastEl = elements[elements.length - 1];
-      const activeElement = document.activeElement;
-
-      if (!modal.contains(activeElement)) {
-        e.preventDefault();
-        (e.shiftKey ? lastEl : firstEl).focus();
-        return;
-      }
 
       if (e.shiftKey) {
+        // Shift + Tab -> reverse wrap
         if (document.activeElement === firstEl || document.activeElement === modal) {
           lastEl.focus();
           e.preventDefault();
         }
-      } else if (document.activeElement === lastEl) {
-        firstEl.focus();
-        e.preventDefault();
+      } else {
+        // Tab -> forward wrap
+        if (document.activeElement === lastEl) {
+          firstEl.focus();
+          e.preventDefault();
+        }
       }
     };
 
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      if (previousTabIndex === null) {
-        modal.removeAttribute("tabindex");
-      } else {
-        modal.setAttribute("tabindex", previousTabIndex);
-      }
     };
   }, [isOpen, ref]);
 }
