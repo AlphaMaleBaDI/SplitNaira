@@ -9,6 +9,7 @@ import type {
 } from "./stellar";
 import { getEnv } from "./env";
 import { withRetry } from "./retry";
+import { isIdempotentRequest } from "./retry-policy";
 
 // ── API Error classification ──────────────────────────────────────────────────
 
@@ -217,13 +218,16 @@ export class ApiClient {
   private async requestJson<T>(
     path: string,
     fallbackMessage: string,
-    init?: RequestInit & { timeout?: number },
+    init?: RequestInit & { timeout?: number; idempotent?: boolean },
   ): Promise<T> {
+    // Only known-idempotent requests are retried; a lost response to a
+    // mutation must not be replayed behind the user's back.
+    const retryable = isIdempotentRequest(init);
     try {
       return await withRetry(
         async () => {
           const timeout = init?.timeout ?? this.defaultTimeout;
-          const { timeout: _timeout, ...fetchInit } = init ?? {};
+          const { timeout: _timeout, idempotent: _idempotent, ...fetchInit } = init ?? {};
           const controller = new AbortController();
           let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -256,9 +260,9 @@ export class ApiClient {
             if (timeoutId) clearTimeout(timeoutId);
           }
         },
-        3,
+        retryable ? 3 : 1,
         500,
-        (err) => this.shouldRetry(err),
+        (err) => retryable && this.shouldRetry(err),
       );
     } catch (err) {
       if (err instanceof Error) {
