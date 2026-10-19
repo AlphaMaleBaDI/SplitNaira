@@ -3,7 +3,7 @@
 import * as Sentry from "@sentry/nextjs";
 import { rpc, Transaction, type FeeBumpTransaction } from "@stellar/stellar-sdk";
 
-import { formatContractFailure } from "./contract-errors";
+import { classifySimulationFailure, formatContractFailure } from "./contract-errors";
 import { getEnv } from "./env";
 import {
   RpcResponseValidationError,
@@ -30,7 +30,16 @@ export function createSorobanRpcServer(): rpc.Server {
 
 function submissionErrorMessage(submit: rpc.Api.SendTransactionResponse): string {
   if (submit.status === "ERROR") {
-    return submit.errorResult?.toString() ?? "Transaction rejected by the network.";
+    // Issue #1495: map the raw `errorResult` to a stable category so callers can
+    // branch on it, and show the user what to do rather than a host protocol
+    // string like `HostError: Error(Contract, #1)`.
+    const classified = classifySimulationFailure(submit.errorResult?.toString() ?? null);
+    if (classified.category === "unknown") {
+      // Unmapped: the original text is more useful than the generic message,
+      // and it is what the pre-existing behaviour showed.
+      return submit.errorResult?.toString() ?? "Transaction rejected by the network.";
+    }
+    return `${classified.message} (${classified.diagnostic})`;
   }
   if (submit.status === "TRY_AGAIN_LATER") {
     return "The RPC node is busy. Please wait a moment and try again.";
