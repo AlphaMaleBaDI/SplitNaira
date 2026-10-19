@@ -165,10 +165,14 @@ export function useWalletState() {
     const interval = setInterval(async () => {
       try {
         const fresh = await getWalletState();
-        if (
-          fresh.connected &&
-          fresh.address !== state.wallet.address
-        ) {
+        // Issue #1507: a disconnect has to clear state too. The previous
+        // guard required `fresh.connected`, which made the one transition that
+        // most needs clearing — the user disconnecting — the one that was
+        // dropped. State kept `connected: true` and the old address, so stale
+        // balances stayed on screen, old-account actions remained reachable,
+        // and the "reconnect" toast could never fire because it keys off the
+        // same flag that was never updated.
+        if (!fresh.connected || fresh.address !== state.wallet.address) {
           dispatch({ type: "RESET" });
           refresh();
         }
