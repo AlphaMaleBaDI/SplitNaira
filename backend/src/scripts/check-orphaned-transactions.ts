@@ -32,10 +32,12 @@
  *
  * Run standalone:
  *   cd backend && npx tsx src/scripts/check-orphaned-transactions.ts
+ *   cd backend && npx tsx src/scripts/check-orphaned-transactions.ts --cleanup-preview
  *
- * Exit code is 1 if either hard condition (1 or 2) has findings, 0 otherwise.
- * See docs/orphaned-transaction-remediation.md for what to do with the
- * output.
+ * Both invocations are read-only. The preview flag makes the cleanup intent
+ * explicit but never changes or deletes records; see
+ * docs/orphaned-transaction-remediation.md for why automatic deletion is
+ * unsafe and how to remediate findings.
  */
 import "reflect-metadata";
 import { fileURLToPath } from "url";
@@ -107,6 +109,30 @@ function isUndefinedTableError(error: unknown): boolean {
 }
 
 const WALLET_LOOKUP_CHUNK_SIZE = 1000;
+
+export interface OrphanedTransactionsCliOptions {
+  cleanupPreview: boolean;
+}
+
+const DISABLED_DESTRUCTIVE_FLAGS = new Set(["--apply", "--cleanup", "--delete"]);
+
+export function parseOrphanedTransactionsCliOptions(
+  args: readonly string[]
+): OrphanedTransactionsCliOptions {
+  const destructiveFlag = args.find((arg) => DISABLED_DESTRUCTIVE_FLAGS.has(arg));
+  if (destructiveFlag) {
+    throw new Error(
+      `Destructive orphan cleanup is not supported (${destructiveFlag}); review findings and remediate them manually.`
+    );
+  }
+
+  if (args.length === 0) return { cleanupPreview: false };
+  if (args.length === 1 && args[0] === "--cleanup-preview") {
+    return { cleanupPreview: true };
+  }
+
+  throw new Error(`Unsupported orphan-check option(s): ${args.join(" ")}`);
+}
 
 async function findExistingWalletAddresses(
   userRepo: ReturnType<DataSource["getRepository"]>,
@@ -262,7 +288,21 @@ function printReport(report: OrphanedTransactionsReport): void {
   }
 }
 
-async function runCli(): Promise<number> {
+async function runCli(args: readonly string[] = process.argv.slice(2)): Promise<number> {
+  let options: OrphanedTransactionsCliOptions;
+  try {
+    options = parseOrphanedTransactionsCliOptions(args);
+  } catch (error) {
+    logger.error(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
+
+  if (options.cleanupPreview) {
+    logger.info(
+      "Cleanup preview is read-only; findings require manual review and no database rows will be changed."
+    );
+  }
+
   let dataSource: DataSource;
   try {
     dataSource = await initDatabase();

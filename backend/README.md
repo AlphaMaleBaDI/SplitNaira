@@ -15,6 +15,7 @@ This fix addresses GitHub Issue #292 (Security: Cross-Site Scripting (XSS) in Sp
 - `npm run deps:check`
 - `npm run generate:openapi` - Regenerates the OpenAPI specification
 - `npm run seed:dev` - Loads deterministic development seed data (see below)
+- `npm run preview:orphaned-cleanup` - Prints a read-only orphaned-transaction cleanup preview; no rows are deleted (see [`../docs/orphaned-transaction-remediation.md`](../docs/orphaned-transaction-remediation.md))
 
 ## Development seed data
 
