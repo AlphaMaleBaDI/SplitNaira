@@ -19,6 +19,64 @@ Event schemas follow a conservative stability contract:
 - Breaking changes are announced in `CHANGELOG.md` and the
   [contract release checklist](./CONTRACT_INTERFACE_RELEASE_CHECKLIST.md).
 
+## Compatibility policy
+
+CI enforces this contract. The machine-readable version is
+[`contracts/interface/events.contract.json`](../contracts/interface/events.contract.json),
+a versioned snapshot of every event's topics and data shape.
+`contracts/scripts/check-event-contract.mjs` extracts the same shape from
+`contracts/events.rs` and compares the two.
+
+On the wire, only **position, kind and type** count. Rust struct and field
+names never reach the wire, so renaming them is not a breaking change.
+
+| Change | Level | Snapshot bump |
+|---|---|---|
+| Event removed, or its `topic[0]` name changed | **breaking** | MAJOR |
+| Topic added, removed, retyped or reordered (topic filters are positional) | **breaking** | MAJOR |
+| Data shape changed (`unit` ↔ `single` ↔ `tuple`) | **breaking** | MAJOR |
+| Data field removed, retyped or reordered | **breaking** | MAJOR |
+| New event | additive | MINOR |
+| New field appended to the *end* of tuple data | additive | MINOR |
+| Rust struct or field renamed, wire shape unchanged | informational | PATCH |
+
+Appending a trailing field counts as additive only because every consumer
+must **ignore extra trailing tuple elements**. The backend's
+`payoutEventValueSchema` and `distributionCompleteEventValueSchema` do this
+with a `z.unknown()` rest element. New decoders must do the same.
+
+### What CI checks
+
+1. `npm run check:events` fails if `events.rs` no longer matches the committed
+   snapshot, if any `publish` call uses an expression the extractor can't
+   model, or if `lib.rs` publishes an event directly instead of through
+   `events.rs`.
+2. On pull requests, the committed snapshot is compared with the snapshot on
+   the base branch. The job fails if the version bump is smaller than the
+   change level, for example a breaking change with only a MINOR bump.
+
+### Changing an event
+
+```bash
+# After editing contracts/events.rs:
+npm run events:update                    # additive / informational: bumps MINOR / PATCH
+npm run events:update -- --allow-breaking # breaking: bumps MAJOR (coordinate consumers first)
+```
+
+Commit the updated snapshot together with the contract change. For a
+breaking change, also do all of the following before merging:
+
+- Update the backend decoders (`backend/src/schemas/stellar-rpc.schemas.ts`,
+  `EventListenerService`) and this catalogue.
+- Add a `CHANGELOG.md` entry under **Changed**.
+- Follow the [release checklist](./CONTRACT_INTERFACE_RELEASE_CHECKLIST.md).
+  The preferred path is still a new `_v2` event, with the old one kept for a
+  deprecation window.
+
+Tests: `backend/src/__tests__/event-contract.test.ts` checks the snapshot
+against the source and that the backend decoders line up with it. It also
+covers every classification rule above and the CLI exit codes.
+
 ---
 
 ## Event Catalogue

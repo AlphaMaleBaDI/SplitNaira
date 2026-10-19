@@ -43,6 +43,8 @@ mod pause_claim_tests;
 #[cfg(test)]
 mod pause_state_transition_tests;
 #[cfg(test)]
+mod prior_state_fixture_tests;
+#[cfg(test)]
 mod reliability_tests;
 #[cfg(test)]
 mod tests;
@@ -476,6 +478,13 @@ impl SplitNairaContract {
         env.storage()
             .persistent()
             .set(&DataKey::ProjectCount, &new_count);
+
+        // A pre-bucket deployment may still hold the legacy flat index. Fold it
+        // into buckets first so the new ID lands after the legacy IDs instead
+        // of hiding them (and so the index position matches `ProjectCount`).
+        if env.storage().persistent().has(&DataKey::ProjectIds) {
+            Self::migrate_flat_project_index(&env);
+        }
 
         // Append to bucketed index for memory-efficient pagination
         let bucket_count: u32 = env
@@ -1217,53 +1226,7 @@ impl SplitNairaContract {
     /// Migrates deprecated flat `ProjectIds` into bucketed index.
     pub fn migrate_flat_to_buckets(env: Env, admin: Address) -> Result<(), SplitError> {
         Self::require_contract_admin(&env, &admin)?;
-
-        let flat_ids: Vec<Symbol> = env
-            .storage()
-            .persistent()
-            .get::<DataKey, Vec<Symbol>>(&DataKey::ProjectIds)
-            .unwrap_or(Vec::new(&env));
-
-        let bucket_count: u32 = env
-            .storage()
-            .persistent()
-            .get::<DataKey, u32>(&DataKey::ProjectIdsBucketCount)
-            .unwrap_or(0);
-
-        if bucket_count == 0 && flat_ids.len() > 0 {
-            for i in 0..flat_ids.len() {
-                let id = flat_ids.get(i as u32).unwrap();
-                let idx = i as u32;
-                let target_bucket = idx / PROJECT_ID_BUCKET_SIZE;
-                let offset = idx % PROJECT_ID_BUCKET_SIZE;
-                if offset == 0 {
-                    let mut bucket = Vec::new(&env);
-                    bucket.push_back(id);
-                    env.storage()
-                        .persistent()
-                        .set(&DataKey::ProjectIdsBucket(target_bucket), &bucket);
-                } else {
-                    let mut bucket: Vec<Symbol> = env
-                        .storage()
-                        .persistent()
-                        .get::<DataKey, Vec<Symbol>>(&DataKey::ProjectIdsBucket(target_bucket))
-                        .unwrap_or(Vec::new(&env));
-                    bucket.push_back(id);
-                    env.storage()
-                        .persistent()
-                        .set(&DataKey::ProjectIdsBucket(target_bucket), &bucket);
-                }
-            }
-            let new_bucket_count = (flat_ids.len() as u32 - 1) / PROJECT_ID_BUCKET_SIZE + 1;
-            env.storage()
-                .persistent()
-                .set(&DataKey::ProjectIdsBucketCount, &new_bucket_count);
-        }
-
-        if env.storage().persistent().has(&DataKey::ProjectIds) {
-            env.storage().persistent().remove(&DataKey::ProjectIds);
-        }
-
+        Self::migrate_flat_project_index(&env);
         Ok(())
     }
 
@@ -1593,32 +1556,97 @@ impl SplitNairaContract {
         }
     }
 
-    /// Loads all project IDs by iterating buckets. Falls back to flat Vec.
+    /// Loads all project IDs: the bucketed index plus any legacy flat-index IDs
+    /// not yet migrated. Accounting sums depend on this seeing every project,
+    /// so a partially migrated (mixed) index must never hide legacy IDs.
     fn get_all_project_ids(env: &Env) -> Vec<Symbol> {
+        let mut all = Self::get_bucketed_project_ids(env);
+        if let Some(flat) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<Symbol>>(&DataKey::ProjectIds)
+        {
+            for id in flat.iter() {
+                if !all.contains(&id) {
+                    all.push_back(id);
+                }
+            }
+        }
+        all
+    }
+
+    fn get_bucketed_project_ids(env: &Env) -> Vec<Symbol> {
+        let bucket_count: u32 = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u32>(&DataKey::ProjectIdsBucketCount)
+            .unwrap_or(0);
+        let mut all = Vec::new(env);
+        for i in 0..bucket_count {
+            let bucket: Vec<Symbol> = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Vec<Symbol>>(&DataKey::ProjectIdsBucket(i))
+                .unwrap_or(Vec::new(env));
+            for id in bucket.iter() {
+                all.push_back(id);
+            }
+        }
+        all
+    }
+
+    /// Appends one ID to the last bucket, opening a new bucket when full.
+    fn append_project_id_to_buckets(env: &Env, project_id: &Symbol) {
         let bucket_count: u32 = env
             .storage()
             .persistent()
             .get::<DataKey, u32>(&DataKey::ProjectIdsBucketCount)
             .unwrap_or(0);
         if bucket_count > 0 {
-            let mut all = Vec::new(env);
-            for i in 0..bucket_count {
-                let bucket: Vec<Symbol> = env
-                    .storage()
-                    .persistent()
-                    .get::<DataKey, Vec<Symbol>>(&DataKey::ProjectIdsBucket(i))
-                    .unwrap_or(Vec::new(env));
-                for id in bucket.iter() {
-                    all.push_back(id);
-                }
-            }
-            all
-        } else {
-            env.storage()
+            let last = bucket_count - 1;
+            let mut bucket: Vec<Symbol> = env
+                .storage()
                 .persistent()
-                .get::<DataKey, Vec<Symbol>>(&DataKey::ProjectIds)
-                .unwrap_or(Vec::new(env))
+                .get::<DataKey, Vec<Symbol>>(&DataKey::ProjectIdsBucket(last))
+                .unwrap_or(Vec::new(env));
+            if bucket.len() < PROJECT_ID_BUCKET_SIZE {
+                bucket.push_back(project_id.clone());
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::ProjectIdsBucket(last), &bucket);
+                return;
+            }
         }
+        let mut bucket = Vec::new(env);
+        bucket.push_back(project_id.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProjectIdsBucket(bucket_count), &bucket);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProjectIdsBucketCount, &(bucket_count + 1));
+    }
+
+    /// Folds the deprecated flat `ProjectIds` index into the bucketed index,
+    /// preserving legacy order and skipping IDs already bucketed, then removes
+    /// the flat key. Idempotent; never drops an ID, even from a mixed index.
+    fn migrate_flat_project_index(env: &Env) {
+        let flat: Vec<Symbol> = match env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<Symbol>>(&DataKey::ProjectIds)
+        {
+            Some(flat) => flat,
+            None => return,
+        };
+        let mut bucketed = Self::get_bucketed_project_ids(env);
+        for id in flat.iter() {
+            if !bucketed.contains(&id) {
+                Self::append_project_id_to_buckets(env, &id);
+                bucketed.push_back(id);
+            }
+        }
+        env.storage().persistent().remove(&DataKey::ProjectIds);
     }
 
     fn get_accounted_balance(env: &Env, token: &Address) -> Result<i128, SplitError> {
@@ -1638,14 +1666,17 @@ impl SplitNairaContract {
         delta: i128,
     ) -> Result<(), SplitError> {
         let key = DataKey::AccountedTokenBalance(token.clone());
-        let prev: i128 = env
-            .storage()
-            .persistent()
-            .get::<DataKey, i128>(&key)
-            .unwrap_or(0);
-        let next = prev
-            .checked_add(delta)
-            .ok_or(SplitError::ArithmeticOverflow)?;
+        // Precondition: every caller has already written the new
+        // `ProjectBalance`. When the cache is missing (state created before the
+        // cache existed), seed it from the live sum, which already includes
+        // `delta`. Seeding from 0 would drop pre-existing project funds from
+        // the accounted total and expose them to `withdraw_unallocated`.
+        let next = match env.storage().persistent().get::<DataKey, i128>(&key) {
+            Some(prev) => prev
+                .checked_add(delta)
+                .ok_or(SplitError::ArithmeticOverflow)?,
+            None => Self::sum_project_balances_for_token(env, token)?,
+        };
         env.storage().persistent().set(&key, &next);
         env.storage().persistent().extend_ttl(
             &key,

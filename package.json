@@ -18,6 +18,8 @@
     "generate:contract-interface": "node contracts/scripts/generate-interface.mjs",
     "generate:contract-types": "npm run generate:contract-interface && node scripts/generate-contract-types.mjs",
     "drift:openapi": "node scripts/check-openapi-drift.mjs",
+    "check:events": "node contracts/scripts/check-event-contract.mjs",
+    "events:update": "node contracts/scripts/check-event-contract.mjs --update",
     "verify:data-integrity": "node scripts/verify-data-integrity.mjs",
     "lint": "npm run lint:frontend && npm run lint:backend",
     "lint:frontend": "cd frontend && npm run lint",
