@@ -147,7 +147,6 @@ function buildBaseProps(dashboardData: SplitProject[]) {
     setActiveTab: noop,
     setSearchProjectId: noop,
     setFetchedProject: noop,
-    getExplorerUrl: (_hash: string, _network: string | null) => "https://example.com",
   };
 }
 

@@ -1,6 +1,5 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
 import { clsx } from "clsx";
 import { sanitizeText } from "@/lib/security";
 import type { SplitProject } from "@/lib/stellar";
@@ -8,9 +7,7 @@ import type {
   TokenAllowlistState,
   UnallocatedBalanceState,
   AdminStatusState,
-  IdempotencyStats,
 } from "@/lib/api";
-import { getIdempotencyStats } from "@/lib/api";
 import type { WalletState } from "@/lib/wallet";
 import { SummaryCardSkeleton, Skeleton } from "../Skeleton";
 import { ProjectCard } from "../ProjectCard";
@@ -65,13 +62,6 @@ interface DashboardViewProps {
   setActiveTab: (tab: "dashboard" | "create" | "manage" | "projects") => void;
   setSearchProjectId: (val: string) => void;
   setFetchedProject: (p: SplitProject | null) => void;
-  /**
-   * Builds a network-correct Stellar explorer link for a transaction hash.
-   * Always the centralized `lib/explorer.ts` helper (via `lib/stellar.ts`)
-   * — never a hardcoded domain — so a mainnet tx doesn't render a testnet
-   * link (#1331).
-   */
-  getExplorerUrl: (hash: string, network: string | null) => string | null;
 }
 
 export function DashboardView({
@@ -115,31 +105,7 @@ export function DashboardView({
   isSubmittingRecovery,
   onConfirmRecovery,
   lastRecoveryTxHash,
-  getExplorerUrl,
 }: DashboardViewProps) {
-  // ── Idempotency stats polling ────────────────────────────────────────────
-  const [idempotencyStats, setIdempotencyStats] =
-    useState<IdempotencyStats | null>(null);
-  const [idempotencyError, setIdempotencyError] = useState<string | null>(null);
-
-  const fetchIdempotencyStats = useCallback(async () => {
-    try {
-      const stats = await getIdempotencyStats();
-      setIdempotencyStats(stats);
-      setIdempotencyError(null);
-    } catch {
-      setIdempotencyError("Failed to load idempotency stats");
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchIdempotencyStats();
-    const interval = setInterval(() => {
-      void fetchIdempotencyStats();
-    }, 15_000);
-    return () => clearInterval(interval);
-  }, [fetchIdempotencyStats]);
-
   return (
     <div className="space-y-10 animate-in fade-in duration-700">
       <div className="grid gap-6 md:grid-cols-3">
@@ -189,7 +155,6 @@ export function DashboardView({
             <SummaryCardSkeleton />
           </div>
         ) : (
-          <div className="glass-card rounded-[2.5rem] p-8 md:p-10 border border-greenBright/10">
           <div className="flex flex-wrap items-start justify-between gap-6">
             <div className="space-y-1">
               <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-greenBright/80">
@@ -304,7 +269,7 @@ export function DashboardView({
                         Tx: {lastAllowlistTx.txHash}
                       </p>
                       <a
-                        href={getExplorerUrl(lastAllowlistTx.txHash, wallet.network) ?? undefined}
+                        href={`https://stellar.expert/explorer/testnet/tx/${lastAllowlistTx.txHash}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-block pt-1 text-[10px] font-bold text-greenBright underline underline-offset-4 hover:text-white"
@@ -342,8 +307,8 @@ export function DashboardView({
               </div>
             )}
           </div>
-          </div>
-        ))}
+        </div>
+      )}
 
       {/* Emergency / Unallocated recovery console */}
       {wallet.connected && isContractAdmin && (
@@ -491,7 +456,7 @@ export function DashboardView({
                 <p className="text-[10px] font-bold uppercase tracking-widest text-greenBright mb-2">Recovery Submitted</p>
                 <p className="font-mono text-[11px] text-muted break-all">Tx: {lastRecoveryTxHash}</p>
                 <a
-                  href={getExplorerUrl(lastRecoveryTxHash, wallet.network) ?? undefined}
+                  href={`https://stellar.expert/explorer/testnet/tx/${lastRecoveryTxHash}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-2 inline-block text-[10px] font-bold text-greenBright underline underline-offset-4 hover:text-white"
@@ -502,7 +467,7 @@ export function DashboardView({
             )}
           </div>
         </div>
-      ))}
+      )}
 
       {/* Issue #165: Distribution Pause Control Plane */}
       {wallet.connected && isContractAdmin && (
@@ -580,7 +545,7 @@ export function DashboardView({
               <p className="text-[10px] font-bold uppercase tracking-widest text-greenBright mb-2">Transaction Submitted</p>
               <p className="font-mono text-[11px] text-muted break-all">Tx: {lastPauseTxHash}</p>
               <a
-                href={getExplorerUrl(lastPauseTxHash, wallet.network) ?? undefined}
+                href={`https://stellar.expert/explorer/testnet/tx/${lastPauseTxHash}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="mt-2 inline-block text-[10px] font-bold text-greenBright underline underline-offset-4 hover:text-white"
@@ -590,7 +555,7 @@ export function DashboardView({
             </div>
           )}
         </div>
-      ))}
+      )}
 
       {/* User Earnings Section */}
       {wallet.connected && (
@@ -620,63 +585,11 @@ export function DashboardView({
                     key={p.projectId}
                     project={p}
                     userEarnings={userEarnings[p.projectId]}
-                    distributionPaused={adminStatus?.isPaused === true}
                   />
                 ))}
             </div>
           </div>
         )
-      )}
-
-      {/* Idempotency Conflicts Panel — Issue #1165 */}
-      {wallet.connected && isContractAdmin && (
-        <div className="glass-card rounded-[2.5rem] p-8 md:p-10 border border-purple-500/10">
-          <div className="flex flex-wrap items-start justify-between gap-6 mb-8">
-            <div className="space-y-1">
-              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-purple-400/80">
-                Ops Observability
-              </p>
-              <h2 className="font-display text-2xl tracking-tight">Idempotency Conflict Counts</h2>
-              <p className="max-w-2xl text-sm text-muted">
-                Live counters for idempotency 409 conflicts (payload mismatch or in-flight) and cached replays. Refreshes every 15 seconds.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => { void fetchIdempotencyStats(); }}
-              className="premium-button rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-muted hover:text-ink"
-            >
-              Refresh
-            </button>
-          </div>
-
-          {idempotencyError ? (
-            <p className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-              {idempotencyError}
-            </p>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-3xl border border-white/5 bg-white/2 p-6">
-                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">409 Conflicts</p>
-                <p className="mt-3 text-4xl font-display text-red-400">
-                  {idempotencyStats ? idempotencyStats.conflictsTotal.toLocaleString() : "—"}
-                </p>
-                <p className="mt-1 text-xs text-muted">
-                  Payload mismatch or in-progress rejection
-                </p>
-              </div>
-              <div className="rounded-3xl border border-white/5 bg-white/2 p-6">
-                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">Cached Replays</p>
-                <p className="mt-3 text-4xl font-display text-greenBright">
-                  {idempotencyStats ? idempotencyStats.replaysTotal.toLocaleString() : "—"}
-                </p>
-                <p className="mt-1 text-xs text-muted">
-                  Cached responses returned for duplicate requests
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
       )}
 
       {/* Performance Rollups */}
