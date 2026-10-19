@@ -1,3 +1,4 @@
+import { StrKey } from "@stellar/stellar-sdk";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   validateEnv,
@@ -15,7 +16,11 @@ const VALID_ENV: Record<string, string> = {
   HORIZON_URL: "https://horizon-testnet.stellar.org",
   SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org",
   SOROBAN_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015",
-  CONTRACT_ID: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  // Issue #1502: the previous fixture was `C` + 55 `A`s, which satisfies the
+  // format regex but has a zeroed checksum and would be rejected by the network.
+  // Generated through the SDK rather than hand-written so the fixture cannot drift
+  // from what a real contract ID looks like.
+  CONTRACT_ID: StrKey.encodeContract(Buffer.alloc(32, 7)),
   SIMULATOR_ACCOUNT: "GABC123SIMULATORACCOUNT456"
 };
 

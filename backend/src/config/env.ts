@@ -1,10 +1,33 @@
+import { StrKey } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { logger } from "../services/logger.js";
 
+/**
+ * A Stellar contract ID: `C` + 55 base32 characters.
+ *
+ * Issue #1502: the regex alone is a *format* check and nothing more. A value can
+ * satisfy it and still be rejected by the network, because a StrKey carries a
+ * trailing CRC-16 checksum over its own payload. The previous schema let such a
+ * value through to startup, where the failure surfaced much later as an opaque
+ * "contract not found" on the first real call.
+ *
+ * `StrKey.isValidContract` checks format *and* checksum. The regex is kept
+ * alongside it purely to produce a precise message for the case it can explain:
+ * wrong shape. The checksum case gets its own message, because "looks like a
+ * contract ID but does not checksum" needs different advice from "is not
+ * contract-shaped at all".
+ */
 const stellarContractIdSchema = z
   .string()
   .min(1, "CONTRACT_ID must not be empty - deploy the Soroban contract first")
-  .regex(/^C[A-Z2-7]{55}$/, "CONTRACT_ID must be a valid Stellar contract address");
+  .regex(
+    /^C[A-Z2-7]{55}$/,
+    "CONTRACT_ID must be a Stellar contract address: 'C' followed by 55 base32 characters (A-Z, 2-7)",
+  )
+  .refine(
+    (value) => StrKey.isValidContract(value),
+    "CONTRACT_ID is well-formed but its StrKey checksum does not match. Copy it from the explorer or `stellar contract list` rather than transcribing it — a single wrong character passes a format check and then fails on-chain.",
+  );
 
 const backendEnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),

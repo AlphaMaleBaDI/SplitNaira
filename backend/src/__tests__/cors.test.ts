@@ -1,3 +1,4 @@
+import { StrKey } from "@stellar/stellar-sdk";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 import express from "express";
@@ -139,7 +140,10 @@ describe("CORS production env validation", () => {
     HORIZON_URL: "https://horizon-testnet.stellar.org",
     SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org",
     SOROBAN_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015",
-    CONTRACT_ID: "CBLASIRZ7CUKC7S5IS3VSNMQGKZ5FTRWLHZZXH7H4YG6ZLRFPJF5H2LR",
+    // Issue #1502: this literal was well-formed but its StrKey checksum did not
+    // match, so it failed startup validation. Generated through the SDK so the
+    // fixture is always a contract ID the network would actually accept.
+    CONTRACT_ID: StrKey.encodeContract(Buffer.alloc(32, 7)),
     SIMULATOR_ACCOUNT: "test_account",
     PAYMENTS_ADMIN_API_KEY: "test-admin-key",
   };
