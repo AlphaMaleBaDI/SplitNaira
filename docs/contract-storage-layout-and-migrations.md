@@ -173,8 +173,32 @@ Every storage layout change must include test coverage across the following test
    - Verify TTL is extended on read and write paths.
 3. **Cost Benchmark Tests (`contracts/cost_benchmark_tests.rs`):**
    - Verify CPU instructions and RAM usage remain within Soroban limits when iterating or storing updated schemas.
-4. **End-to-End Migration Simulation:**
+4. **Prior-State Fixture Tests (`contracts/prior_state_fixture_tests.rs`):**
+   - Every layout change must add or update a fixture that rebuilds the storage *previous* versions left behind. Run today's code against it.
+   - Fixtures today:
+     - `v1_flat_index`: flat `ProjectIds`; no buckets, accounting cache or claim epochs.
+     - `v2_pre_accounting`: buckets, but no `AccountedTokenBalance` and no claim epochs.
+     - `v3_mixed_index`: legacy IDs only in the flat index, plus a bucket holding a newer ID.
+   - Each fixture must check:
+     - Reads work before any migration.
+     - Project funds are never reported as unallocated.
+     - `deposit`, `distribute` and `claim` give the same results as on a fresh deployment.
+     - Migrations are idempotent, admin-only and never drop or reorder an ID, including at the 99/100/101 bucket boundaries.
+   - When you add a new `DataKey`, add a step to the fixture builders that removes it (`strip_post_v2_keys` or a new `vN` builder). That way the next upgrade is tested against state without it.
+5. **End-to-End Migration Simulation:**
    - Execute test against state populated with previous contract WASM, perform upgrade via `stellar contract install` / upgrade call, and assert read/write operations succeed without data corruption.
+
+### Upgrade-safety fixes from the prior-state fixtures
+
+- **Accounting cache seeding.** `AccountedTokenBalance(token)` arrived after projects already held funds. Code that treated a missing cache as `0` made the first `deposit`, `distribute` or `claim` after an upgrade seed the cache with only that change. `get_unallocated_balance` then reported the older project balances as unallocated, and `withdraw_unallocated` could have drained them. A missing cache is now seeded from the live sum of project balances.
+  - Precondition: `ProjectBalance` must be written before `adjust_accounted_token_balance` is called.
+  - Cost: that first post-upgrade call per token runs one full project scan.
+- **Legacy flat index.** Before this fix:
+  - On a v1 contract, the first `create_project` started a new bucket and hid the legacy IDs from listings and from the accounting sum.
+  - A later `migrate_flat_to_buckets` then deleted the flat list, losing those IDs from the index for good.
+
+  Now `create_project` folds the flat index into buckets before its first bucketed write. Migration merges (it keeps bucketed IDs, appends missing legacy IDs in their original order and never drops one). The accounting sum also reads the union of both indexes.
+  - Operator note: run `migrate_flat_to_buckets` once after upgrading a v1 contract. Very large flat indexes may need it done before the first `create_project`, which would otherwise pay the migration cost itself.
 
 ---
 

@@ -1,0 +1,535 @@
+{
+  "schema": "splitnaira.event-contract",
+  "version": "1.0.0",
+  "source": "contracts/events.rs",
+  "events": {
+    "accounting_discrepancy": {
+      "struct": "AccountingDiscrepancy",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "accounting_discrepancy",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "token",
+          "type": "Address"
+        }
+      ],
+      "data": {
+        "shape": "tuple",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "contract_balance",
+            "type": "i128"
+          },
+          {
+            "position": 1,
+            "kind": "field",
+            "field": "accounted_balance",
+            "type": "i128"
+          }
+        ]
+      }
+    },
+    "collaborator_claimed": {
+      "struct": "CollaboratorClaimed",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "collaborator_claimed",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "project_id",
+          "type": "Symbol"
+        }
+      ],
+      "data": {
+        "shape": "tuple",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "claimer",
+            "type": "Address"
+          },
+          {
+            "position": 1,
+            "kind": "field",
+            "field": "amount",
+            "type": "i128"
+          },
+          {
+            "position": 2,
+            "kind": "field",
+            "field": "distribution_round",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    "collaborators_updated": {
+      "struct": "CollaboratorsUpdated",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "collaborators_updated",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "project_id",
+          "type": "Symbol"
+        }
+      ],
+      "data": {
+        "shape": "single",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "project_id",
+            "type": "Symbol"
+          }
+        ]
+      }
+    },
+    "deposit_received": {
+      "struct": "DepositReceived",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "deposit_received",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "project_id",
+          "type": "Symbol"
+        }
+      ],
+      "data": {
+        "shape": "tuple",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "from",
+            "type": "Address"
+          },
+          {
+            "position": 1,
+            "kind": "field",
+            "field": "amount",
+            "type": "i128"
+          },
+          {
+            "position": 2,
+            "kind": "field",
+            "field": "project_balance",
+            "type": "i128"
+          }
+        ]
+      }
+    },
+    "distribution_complete": {
+      "struct": "DistributionComplete",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "distribution_complete",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "project_id",
+          "type": "Symbol"
+        }
+      ],
+      "data": {
+        "shape": "tuple",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "round",
+            "type": "u32"
+          },
+          {
+            "position": 1,
+            "kind": "field",
+            "field": "total",
+            "type": "i128"
+          }
+        ]
+      }
+    },
+    "distributions_paused": {
+      "struct": "DistributionsPaused",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "distributions_paused",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "admin",
+          "type": "Address"
+        }
+      ],
+      "data": {
+        "shape": "unit",
+        "fields": []
+      }
+    },
+    "distributions_unpaused": {
+      "struct": "DistributionsUnpaused",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "distributions_unpaused",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "admin",
+          "type": "Address"
+        }
+      ],
+      "data": {
+        "shape": "unit",
+        "fields": []
+      }
+    },
+    "max_collaborators_set": {
+      "struct": "MaxCollaboratorsUpdated",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "max_collaborators_set",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "admin",
+          "type": "Address"
+        }
+      ],
+      "data": {
+        "shape": "single",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "value",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    "metadata_updated": {
+      "struct": "MetadataUpdated",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "metadata_updated",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "project_id",
+          "type": "Symbol"
+        }
+      ],
+      "data": {
+        "shape": "single",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "project_id",
+            "type": "Symbol"
+          }
+        ]
+      }
+    },
+    "ownership_transferred": {
+      "struct": "OwnershipTransferred",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "ownership_transferred",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "project_id",
+          "type": "Symbol"
+        }
+      ],
+      "data": {
+        "shape": "tuple",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "previous_owner",
+            "type": "Address"
+          },
+          {
+            "position": 1,
+            "kind": "field",
+            "field": "new_owner",
+            "type": "Address"
+          }
+        ]
+      }
+    },
+    "payment_sent": {
+      "struct": "PaymentSent",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "payment_sent",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "project_id",
+          "type": "Symbol"
+        }
+      ],
+      "data": {
+        "shape": "tuple",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "recipient",
+            "type": "Address"
+          },
+          {
+            "position": 1,
+            "kind": "field",
+            "field": "amount",
+            "type": "i128"
+          }
+        ]
+      }
+    },
+    "project_created": {
+      "struct": "ProjectCreated",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "project_created",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "project_id",
+          "type": "Symbol"
+        }
+      ],
+      "data": {
+        "shape": "single",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "owner",
+            "type": "Address"
+          }
+        ]
+      }
+    },
+    "project_locked": {
+      "struct": "ProjectLocked",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "project_locked",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "project_id",
+          "type": "Symbol"
+        }
+      ],
+      "data": {
+        "shape": "single",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "project_id",
+            "type": "Symbol"
+          }
+        ]
+      }
+    },
+    "splits_updated_pending_balance": {
+      "struct": "SplitsUpdatedWithPendingBalance",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "splits_updated_pending_balance",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "project_id",
+          "type": "Symbol"
+        }
+      ],
+      "data": {
+        "shape": "single",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "pending_balance",
+            "type": "i128"
+          }
+        ]
+      }
+    },
+    "token_allowed": {
+      "struct": "TokenAllowed",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "token_allowed",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "token",
+          "type": "Address"
+        }
+      ],
+      "data": {
+        "shape": "single",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "admin",
+            "type": "Address"
+          }
+        ]
+      }
+    },
+    "token_disallowed": {
+      "struct": "TokenDisallowed",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "token_disallowed",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "token",
+          "type": "Address"
+        }
+      ],
+      "data": {
+        "shape": "single",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "admin",
+            "type": "Address"
+          }
+        ]
+      }
+    },
+    "unallocated_withdrawn": {
+      "struct": "UnallocatedWithdrawn",
+      "topics": [
+        {
+          "position": 0,
+          "kind": "symbol",
+          "value": "unallocated_withdrawn",
+          "type": "Symbol"
+        },
+        {
+          "position": 1,
+          "kind": "field",
+          "field": "token",
+          "type": "Address"
+        }
+      ],
+      "data": {
+        "shape": "tuple",
+        "fields": [
+          {
+            "position": 0,
+            "kind": "field",
+            "field": "admin",
+            "type": "Address"
+          },
+          {
+            "position": 1,
+            "kind": "field",
+            "field": "to",
+            "type": "Address"
+          },
+          {
+            "position": 2,
+            "kind": "field",
+            "field": "amount",
+            "type": "i128"
+          },
+          {
+            "position": 3,
+            "kind": "field",
+            "field": "remaining_unallocated",
+            "type": "i128"
+          }
+        ]
+      }
+    }
+  }
+}

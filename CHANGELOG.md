@@ -17,6 +17,7 @@ This fix addreesses GitHub Issue #292 (Security: Cross-Site Scripting (XSS) in S
 <!-- 
 This fix addresses GitHub Issue #292 (Security: Cross-Site Scripting (XSS) in Split Description Field) by implementing comprehensive XSS prevention across the entire application using a 3-layer defense strategy. -->
 ### Security
+- Contract: after an upgrade, a missing `AccountedTokenBalance` cache is now seeded from the live project balances, not `0`. Before this, the first `deposit`/`distribute`/`claim` on prior state made existing project funds look unallocated, and `withdraw_unallocated` could have drained them. See `docs/contract-storage-layout-and-migrations.md`.
 - **CRITICAL FIX:** XSS (Cross-Site Scripting) vulnerability eliminated in project title, type, and collaborator alias fields (closes #292)
   - Implemented server-side character whitelist validation on all user input fields
   - Added frontend HTML escaping utilities (`sanitizeText()`) for defense-in-depth
@@ -27,6 +28,8 @@ This fix addresses GitHub Issue #292 (Security: Cross-Site Scripting (XSS) in Sp
 - Owner-gated split mutations (`lock`, `collaborators`, `metadata`) now verify the requested `owner` against on-chain project state before building unsigned XDR; non-owners get `401 UNAUTHORIZED` instead of a transaction the contract would reject after signing (closes #1092). See `docs/wallet-signing-threat-model.md`.
 
 ### Added
+- Contract event integration contract: `contracts/interface/events.contract.json` is a versioned wire-shape snapshot of all 17 events. `npm run check:events` checks it in CI against `events.rs`, and on PRs against the base branch's snapshot. Breaking changes need a MAJOR bump (`npm run events:update -- --allow-breaking`). See `docs/contract-events.md#compatibility-policy`.
+- Prior-state fixture tests (`contracts/prior_state_fixture_tests.rs`) that run today's contract against v1 (flat index), v2 (pre-accounting-cache) and v3 (mixed index) storage layouts.
 - Release automation workflow for draft GitHub Releases on `v0.x.y` tag pushes.
 - `CHANGELOG.md` to track notable changes and release notes.
 - README guidance for version-to-contract WASM mapping and traceability.
@@ -40,6 +43,7 @@ This fix addresses GitHub Issue #292 (Security: Cross-Site Scripting (XSS) in Sp
 - Distribution remainder accounting documentation (`docs/contract-distribution-remainder-accounting.md`): remainder rule, invariants, zero-share and `claim` edge cases, off-chain preview guidance.
 
 ### Fixed
+- Contract: `create_project` on a contract that still has the legacy flat `ProjectIds` index now folds it into buckets first, so legacy IDs are no longer hidden. `migrate_flat_to_buckets` now merges a mixed index instead of deleting the flat list, which used to lose legacy IDs.
 - `buildWithdrawUnallocatedUnsignedXdr` now validates `admin`/`token`/`to` addresses before any RPC call and raises `RequestValidationError` instead of a generic error.
 - Backend: SSE routes return `503 shutting_down` for new streams once shutdown starts, so late subscribers can no longer hold the process open until the force-exit timer (#1094).
 - Backend: `withTransaction()` always releases its connection (even when `startTransaction()` fails), keeps the caller's error when rollback fails, and no longer throws on release failure after a commit (#1091).

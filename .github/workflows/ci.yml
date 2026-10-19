@@ -95,6 +95,17 @@ jobs:
       # Issue #835: Fail CI if the committed OpenAPI artifact has drifted
       # from the published route schemas. Contributors must regenerate.
       - run: npm run drift:openapi
+      # Contract events are an integration contract: fail if events.rs drifted
+      # from the committed snapshot, or if a PR ships a breaking event change
+      # without a MAJOR bump of the snapshot version. See docs/contract-events.md.
+      - run: npm run check:events
+      - name: Event contract compatibility vs base branch
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          git show "FETCH_HEAD:contracts/interface/events.contract.json" > "$RUNNER_TEMP/base-events.contract.json" 2>/dev/null \
+            || rm -f "$RUNNER_TEMP/base-events.contract.json"
+          node contracts/scripts/check-event-contract.mjs --base "$RUNNER_TEMP/base-events.contract.json"
       - run: npm run test:compat -w backend -- --reporter=verbose
       - run: npm run test -w backend -- --reporter=verbose
 
