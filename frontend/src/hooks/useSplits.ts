@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useContext, useEffect, useRef } from "react";
+import { QueryClientContext, useMutation, useQuery, type QueryClient } from "@tanstack/react-query";
 import {
   getAllSplits,
   getSplit,
@@ -8,19 +9,19 @@ import {
   getAdminStatus,
   getUnallocatedBalance,
 } from "@/lib/api";
+import { accountKeys, isForeignAccountKey, splitKeys } from "@/lib/query-keys";
+import {
+  invalidateAfterMutation,
+  type SplitMutationAction,
+  type SplitMutationContext,
+} from "@/lib/split-mutations";
 
-export const splitKeys = {
-  all: ["splits"] as const,
-  list: () => [...splitKeys.all, "list"] as const,
-  detail: (projectId: string) => [...splitKeys.all, "detail", projectId] as const,
-  history: (projectId: string) => [...splitKeys.all, "history", projectId] as const,
-  claimable: (projectId: string, address: string) =>
-    [...splitKeys.all, "claimable", projectId, address] as const,
-  allowlist: (start: number, limit: number) =>
-    [...splitKeys.all, "allowlist", start, limit] as const,
-  adminStatus: () => [...splitKeys.all, "adminStatus"] as const,
-  unallocated: (token: string) => [...splitKeys.all, "unallocated", token] as const,
-};
+export { accountKeys, splitKeys } from "@/lib/query-keys";
+
+/** The provider's QueryClient, or undefined when rendered without one (tests, storybook). */
+export function useOptionalQueryClient(): QueryClient | undefined {
+  return useContext(QueryClientContext);
+}
 
 export function useAllSplits() {
   return useQuery({
@@ -45,9 +46,10 @@ export function useProjectHistory(projectId: string) {
   });
 }
 
+/** Account-scoped: cached under the wallet's own scope, dropped on account switch. */
 export function useClaimable(projectId: string, address: string) {
   return useQuery({
-    queryKey: splitKeys.claimable(projectId, address),
+    queryKey: accountKeys.claimable(address, projectId),
     queryFn: () => getClaimable(projectId, address),
     enabled: Boolean(projectId) && Boolean(address),
   });
@@ -72,5 +74,51 @@ export function useUnallocatedBalance(token: string) {
     queryKey: splitKeys.unallocated(token),
     queryFn: () => getUnallocatedBalance(token),
     enabled: Boolean(token),
+  });
+}
+
+/**
+ * Drops every account-scoped query that does not belong to `address`, and all
+ * of them on disconnect. In-flight fetches for the old account are cancelled
+ * first so a late response can't repopulate its cache.
+ */
+export function useAccountScopedCache(address: string | null) {
+  const queryClient = useOptionalQueryClient();
+  const previous = useRef<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!queryClient) return;
+    if (previous.current === address) return;
+    previous.current = address;
+    const predicate = (query: { queryKey: readonly unknown[] }) =>
+      isForeignAccountKey(query.queryKey, address);
+    void queryClient.cancelQueries({ predicate });
+    queryClient.removeQueries({ predicate });
+  }, [address, queryClient]);
+}
+
+/**
+ * Split write action with dependent-view invalidation.
+ *
+ * Mutations are never retried automatically (they are not idempotent). The
+ * signer is captured when the mutation starts; on success only the shared
+ * views plus that signer's own account scope are invalidated, and the latter
+ * is skipped if the wallet changed mid-flight.
+ */
+export function useSplitMutation<TVars extends SplitMutationContext, TResult>(
+  action: SplitMutationAction,
+  mutationFn: (vars: TVars) => Promise<TResult>,
+  currentAccount: string | null,
+) {
+  const queryClient = useOptionalQueryClient();
+  const accountRef = useRef(currentAccount);
+  accountRef.current = currentAccount;
+
+  return useMutation({
+    mutationKey: ["split-mutation", action],
+    mutationFn,
+    retry: 0,
+    onSuccess: (_result, vars) =>
+      invalidateAfterMutation(queryClient, action, vars, accountRef.current),
   });
 }

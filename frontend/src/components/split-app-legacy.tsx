@@ -45,6 +45,10 @@ import {
   getExplorerLabel,
 } from "@/lib/stellar";
 import { useWallet } from "@/hooks/useWallet";
+import { useAccountScopedCache, useOptionalQueryClient } from "@/hooks/useSplits";
+import { useConnectionStatus } from "@/hooks/useConnectionStatus";
+import { clearDraft, loadDraft, saveDraft } from "@/lib/form-draft";
+import { invalidateAfterMutation } from "@/lib/split-mutations";
 import { notify } from "@/lib/notification";
 import { WalletError } from "./WalletError";
 import { trackSplitLifecycle } from "@/lib/telemetry";
@@ -167,6 +171,46 @@ export function SplitApp({
     // error summary when there are several errors (#1267).
     shouldFocusError: false,
   });
+
+  // Account-scoped React Query data never outlives the wallet it belongs to.
+  const queryClient = useOptionalQueryClient();
+  useAccountScopedCache(wallet.address);
+  const walletAddressRef = useRef(wallet.address);
+  walletAddressRef.current = wallet.address;
+  const connectionStatus = useConnectionStatus();
+
+  // Create-form drafts are stored per account (see lib/form-draft.ts).
+  // connect (null -> A): keep what was typed and adopt it under A.
+  // switch (A -> B) or disconnect: load B's draft or start clean, so one
+  // account's input is never shown to, or saved under, another account.
+  const draftAccountRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const prev = draftAccountRef.current;
+    const next = wallet.address;
+    draftAccountRef.current = next;
+    if (prev === undefined) {
+      const draft = loadDraft("create", next);
+      if (draft) reset({ ...getInitialCreateFormValues(), ...draft });
+      return;
+    }
+    if (prev === next) return;
+    if (prev === null && next) {
+      clearDraft("create", null);
+      return;
+    }
+    const draft = loadDraft("create", next);
+    reset(draft ? { ...getInitialCreateFormValues(), ...draft } : getInitialCreateFormValues());
+  }, [wallet.address, reset]);
+
+  useEffect(() => {
+    const subscription = watch((values) => saveDraft("create", walletAddressRef.current, values));
+    return () => subscription.unsubscribe();
+  }, [watch]);
+
+  const refreshDependentViews = (
+    action: Parameters<typeof invalidateAfterMutation>[1],
+    ctx: Parameters<typeof invalidateAfterMutation>[2],
+  ) => void invalidateAfterMutation(queryClient, action, ctx, walletAddressRef.current);
   const {
     fields: collaboratorFields,
     append: appendCollaborator,
@@ -497,6 +541,7 @@ export function SplitApp({
       telemetry.submitted(submitResponse.hash);
       telemetry.succeeded();
       notify.success("Project metadata updated successfully.");
+      refreshDependentViews("update_metadata", { projectId: projectId, account: wallet.address });
     } catch (error) {
       telemetry.failed(error);
       patchProjectInAllViews(projectId, previousSnapshot);
@@ -539,6 +584,7 @@ export function SplitApp({
       telemetry.submitted(submitResponse.hash);
       telemetry.succeeded();
       notify.success("Collaborators updated successfully.");
+      refreshDependentViews("update_collaborators", { projectId: fetchedProject.projectId, account: wallet.address });
       setIsEditingCollaborators(false);
       await onFetchProject();
     } catch (error) {
@@ -552,6 +598,7 @@ export function SplitApp({
   }
 
   function _onWizardReset() {
+    clearDraft("create", wallet.address);
     setCreateStep(1);
     reset(getInitialCreateFormValues());
     setTxHash(null);
@@ -635,6 +682,10 @@ export function SplitApp({
     submissionGuard.run("create", () => runCreate(data));
 
   const runCreate = async (data: CreateSplitFormValues) => {
+    if (connectionStatus === "offline") {
+      notify.error("You're offline. Your input is saved; submit again when you're back online.");
+      return;
+    }
     if (!wallet.connected || !wallet.address) {
       notify.error("Connect your wallet first.");
       return;
@@ -702,6 +753,8 @@ export function SplitApp({
         prev?.action === "create" && prev.hash ? { ...prev, lifecycle: "success" } : prev,
       );
       notify.success("Split project created successfully.");
+      clearDraft("create", wallet.address);
+      refreshDependentViews("create", { projectId: data.projectId.trim(), account: wallet.address });
       setCreateRetryError(null);
 
       try {
@@ -802,6 +855,7 @@ export function SplitApp({
         prev?.action === "distribute" && prev.hash ? { ...prev, lifecycle: "success" } : prev,
       );
       notify.success("Distribution completed successfully.");
+      refreshDependentViews("distribute", { projectId: fetchedProject.projectId, account: wallet.address });
       await onFetchProject();
     } catch (error) {
       telemetry.failed(error);
@@ -861,6 +915,7 @@ export function SplitApp({
       setFetchedProject((prev) => (prev ? { ...prev, locked: true } : prev));
       setShowLockModal(false);
       notify.success("Project locked permanently.");
+      refreshDependentViews("lock", { projectId: fetchedProject.projectId, account: wallet.address });
     } catch (error) {
       telemetry.failed(error);
       blockIfUnconfirmed("lock", error, submitted);
@@ -935,6 +990,7 @@ export function SplitApp({
       );
       closeDepositModal();
       notify.success("Deposit successful!");
+      refreshDependentViews("deposit", { projectId: fetchedProject.projectId, account: wallet.address });
       await onFetchProject();
     } catch (error) {
       telemetry.failed(error);

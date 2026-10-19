@@ -9,6 +9,8 @@ import { useFocusTrap } from "./useFocusTrap";
 import useLockBodyScroll from "./useLockBodyScroll";
 import { useMaintenanceStatus } from "@/hooks/useMaintenanceStatus";
 import { MaintenanceBanner } from "./MaintenanceBanner";
+import { ConnectionStatusBanner } from "./ConnectionStatusBanner";
+import { useConnectionStatus } from "@/hooks/useConnectionStatus";
 
 const MODAL_SELECTORS = [
   "[role='dialog'][aria-modal='true']",
@@ -149,6 +151,7 @@ export function SplitApp() {
 
   return (
     <div ref={rootRef}>
+      <ConnectionStatusBanner status={connectionStatus} className="mx-auto mb-6 w-full max-w-4xl" />
       <MaintenanceBanner
         status={maintenanceStatus}
         message={maintenanceMessage}
