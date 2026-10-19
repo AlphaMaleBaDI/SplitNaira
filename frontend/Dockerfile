@@ -6,8 +6,8 @@ FROM node:18-alpine AS deps
 RUN apk add --no-cache libc6-compat
 
 WORKDIR /app
-<!-- 
-This fix addresses GitHub Issue #292 (Security: Cross-Site Scripting (XSS) in Split Description Field) by implementing comprehensive XSS prevention across the entire application using a 3-layer defense strategy. -->
+# Issue #292: prevent cross-site scripting in split descriptions.
+# XSS protection is implemented across the application using a three-layer defense strategy.
 # Copy package files
 COPY package.json package-lock.json ./
 

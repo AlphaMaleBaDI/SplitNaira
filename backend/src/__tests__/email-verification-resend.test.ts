@@ -19,6 +19,10 @@ const findOneMock = vi.fn();
 const updateMock = vi.fn();
 const sendVerificationEmailMock = vi.fn();
 
+const tokenState = vi.hoisted(() => ({
+  store: new Map<string, { tokenHash: string; expiresAt: Date; consumedAt: Date | null }>(),
+}));
+
 vi.mock("../services/database.js", () => ({
   getDataSource: () => ({
     getRepository: () => ({ findOne: findOneMock, update: updateMock }),
@@ -32,6 +36,51 @@ vi.mock("../services/email-provider.js", async () => {
   return {
     ...actual,
     getEmailProvider: () => ({ sendVerificationEmail: sendVerificationEmailMock }),
+  };
+});
+
+// In-memory stand-in for the persisted token store (#1444) that follows the
+// same contract as the SQL: one live hash per email, consumed on first use.
+vi.mock("../services/email-verification-token.js", async () => {
+  const { signEmailFlowToken } = await vi.importActual<
+    typeof import("../services/email-provider.js")
+  >("../services/email-provider.js");
+  const { createHash } = await import("node:crypto");
+  const hash = (token: string) => createHash("sha256").update(token).digest("hex");
+  const key = (email: string) => email.trim().toLowerCase();
+
+  return {
+    hashEmailVerificationToken: hash,
+    issueEmailVerificationToken(email: string) {
+      const token = signEmailFlowToken(email, "email_verification");
+      const payload = JSON.parse(
+        Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")
+      ) as { exp: number };
+      return { token, tokenHash: hash(token), expiresAt: new Date(payload.exp * 1000) };
+    },
+    async rotateEmailVerificationToken(
+      email: string,
+      issued: { tokenHash: string; expiresAt: Date }
+    ) {
+      tokenState.store.set(key(email), {
+        tokenHash: issued.tokenHash,
+        expiresAt: issued.expiresAt,
+        consumedAt: null,
+      });
+    },
+    async consumeEmailVerificationToken(email: string, tokenHash: string, now = new Date()) {
+      const record = tokenState.store.get(key(email));
+      if (!record || record.consumedAt || record.tokenHash !== tokenHash) return false;
+      if (record.expiresAt <= now) return false;
+      record.consumedAt = now;
+      return true;
+    },
+    async invalidateEmailVerificationToken(email: string, tokenHash: string) {
+      const record = tokenState.store.get(key(email));
+      if (record && record.tokenHash === tokenHash && !record.consumedAt) {
+        record.consumedAt = new Date();
+      }
+    },
   };
 });
 
@@ -54,6 +103,7 @@ function resend(app: express.Express, email = EMAIL) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  tokenState.store.clear();
   verificationResendCooldown.clear();
   findOneMock.mockResolvedValue({ email: EMAIL, emailVerifiedAt: null });
   updateMock.mockResolvedValue({ affected: 1 });
@@ -215,9 +265,11 @@ describe("POST /auth/email-verification/resend (#1443)", () => {
 
 describe("POST /auth/email-verification/confirm (#1443)", () => {
   it("marks accounts with the token's email as verified", async () => {
-    const token = signEmailFlowToken(EMAIL, "email_verification");
+    const app = createApp();
+    await resend(app).expect(202);
+    const token = sendVerificationEmailMock.mock.calls[0][0].token as string;
 
-    const res = await request(createApp())
+    const res = await request(app)
       .post("/auth/email-verification/confirm")
       .send({ token })
       .expect(200);
@@ -233,6 +285,16 @@ describe("POST /auth/email-verification/confirm (#1443)", () => {
     ["a malformed token", "not-a-jwt"],
     ["a token for a different purpose", signEmailFlowToken(EMAIL, "password_reset")],
   ])("rejects %s with 400", async (_label, token) => {
+    const res = await request(createApp())
+      .post("/auth/email-verification/confirm")
+      .send({ token })
+      .expect(400);
+    expect(res.body.error).toBe("invalid_or_expired_token");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an untracked token that was never issued by this service", async () => {
+    const token = signEmailFlowToken(EMAIL, "email_verification");
     const res = await request(createApp())
       .post("/auth/email-verification/confirm")
       .send({ token })

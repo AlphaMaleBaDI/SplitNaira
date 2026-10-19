@@ -8,7 +8,8 @@ import {
 import { AppError, ErrorCode, ErrorType } from "../lib/errors.js";
 import { serializeBigInts, listProjects, fetchProjectById, buildLockProjectUnsignedXdr, buildDepositUnsignedXdr, encodeCursor, decodeCursor, simulateReadOnlyContractCall } from "../services/splits.service.js";
 import { recordProjectEdit } from "../services/project-history.js";
-import { scValToNative } from "@stellar/stellar-sdk";
+import { contractU32Schema } from "../schemas/stellar-rpc.schemas.js";
+import { decodeContractValue } from "../services/rpc-response-validation.js";
 import { deriveParticipantStatuses } from "../lib/split-lifecycle.js";
 import { createPayoutHistoryService } from "../services/PayoutHistoryService.js";
 import { logger } from "../services/logger.js";
@@ -85,7 +86,7 @@ export class SplitsController {
       ]);
 
       const totalCount = total
-        ? Number(scValToNative(total))
+        ? decodeContractValue("simulateTransaction:get_project_count", contractU32Schema, total)
         : 0;
 
       const nextStart = start + projects.length;

@@ -1,4 +1,4 @@
-﻿#![cfg(test)]
+#![cfg(test)]
 
 //! Reliability tests for SplitNaira.
 //!
@@ -12,22 +12,9 @@
 //!
 //! Soroban SDK: 20.5.0
 
-use soroban_sdk::{
-    testutils::Address as _,
-    vec,
-    Address,
-    Env,
-    String,
-    Symbol,
-    Vec,
-};
+use soroban_sdk::{testutils::Address as _, vec, Address, Env, String, Symbol, Vec};
 
-use crate::{
-    errors::SplitError,
-    Collaborator,
-    SplitNairaContract,
-    SplitNairaContractClient,
-};
+use crate::{errors::SplitError, Collaborator, SplitNairaContract, SplitNairaContractClient};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared test helpers
@@ -54,11 +41,7 @@ fn two_collabs(env: &Env) -> Vec<Collaborator> {
 }
 
 /// Creates two collaborators with the supplied basis-point split.
-fn collaborators_with_shares(
-    env: &Env,
-    first_share: i128,
-    second_share: i128,
-) -> Vec<Collaborator> {
+fn collaborators_with_shares(env: &Env, first_share: u32, second_share: u32) -> Vec<Collaborator> {
     let first = Address::generate(env);
     let second = Address::generate(env);
 
@@ -347,11 +330,7 @@ fn test_update_collaborators_locked_project_returns_project_locked() {
 
     client.lock_project(&project_id, &owner);
 
-    let result = client.try_update_collaborators(
-        &project_id,
-        &owner,
-        &two_collabs(&env),
-    );
+    let result = client.try_update_collaborators(&project_id, &owner, &two_collabs(&env));
 
     assert_eq!(result, Err(Ok(SplitError::ProjectLocked)));
 }
@@ -365,11 +344,7 @@ fn test_update_collaborators_non_owner_returns_unauthorized() {
     let (client, _, _) = setup_project(&env, &project_id);
     let attacker = Address::generate(&env);
 
-    let result = client.try_update_collaborators(
-        &project_id,
-        &attacker,
-        &two_collabs(&env),
-    );
+    let result = client.try_update_collaborators(&project_id, &attacker, &two_collabs(&env));
 
     assert_eq!(result, Err(Ok(SplitError::Unauthorized)));
 }
@@ -383,11 +358,7 @@ fn test_update_collaborators_missing_project_returns_not_found() {
     let project_id = Symbol::new(&env, "missing_update");
     let owner = Address::generate(&env);
 
-    let result = client.try_update_collaborators(
-        &project_id,
-        &owner,
-        &two_collabs(&env),
-    );
+    let result = client.try_update_collaborators(&project_id, &owner, &two_collabs(&env));
 
     assert_eq!(result, Err(Ok(SplitError::NotFound)));
 }
@@ -405,11 +376,7 @@ fn test_deposit_zero_amount_returns_invalid_amount() {
     let (client, _, _) = setup_project(&env, &project_id);
     let depositor = Address::generate(&env);
 
-    let result = client.try_deposit(
-        &project_id,
-        &depositor,
-        &0,
-    );
+    let result = client.try_deposit(&project_id, &depositor, &0);
 
     assert_eq!(result, Err(Ok(SplitError::InvalidAmount)));
 }
@@ -423,11 +390,7 @@ fn test_deposit_negative_amount_returns_invalid_amount() {
     let (client, _, _) = setup_project(&env, &project_id);
     let depositor = Address::generate(&env);
 
-    let result = client.try_deposit(
-        &project_id,
-        &depositor,
-        &-1,
-    );
+    let result = client.try_deposit(&project_id, &depositor, &-1);
 
     assert_eq!(result, Err(Ok(SplitError::InvalidAmount)));
 }
@@ -441,11 +404,7 @@ fn test_deposit_missing_project_returns_not_found() {
     let project_id = Symbol::new(&env, "nope");
     let depositor = Address::generate(&env);
 
-    let result = client.try_deposit(
-        &project_id,
-        &depositor,
-        &100,
-    );
+    let result = client.try_deposit(&project_id, &depositor, &100);
 
     assert_eq!(result, Err(Ok(SplitError::NotFound)));
 }

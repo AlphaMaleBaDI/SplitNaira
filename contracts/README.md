@@ -344,3 +344,4 @@ Soroban event shape is `(topics, data)`. This contract uses `topics = (event_nam
 - `19` `TooManyCollaborators`
 - `20` `AccountingDiscrepancy`
 - `21` `InvalidMaxCollaborators`
+- `22` `AlreadyClaimed` — the caller has already claimed the entitlement for the current claim epoch.

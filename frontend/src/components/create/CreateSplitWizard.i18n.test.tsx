@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { useFieldArray, useForm } from "react-hook-form";
@@ -34,7 +34,7 @@ function LocalizedHarness({
   initialValues,
 }: {
   locale: string;
-  messages: any;
+  messages: typeof enMessages | typeof frMessages;
   initialValues?: Partial<CreateSplitFormValues>;
 }) {
   const {

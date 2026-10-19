@@ -100,4 +100,23 @@ describe("resolveUnconfirmedSubmission (#1266)", () => {
     const server = { getTransaction: vi.fn().mockRejectedValue(new Error("rpc down")) };
     expect(await resolveUnconfirmedSubmission(server, submission, expiresAt + 10_000)).toBe("pending");
   });
+
+  // Issue #1494: "expired" unblocks a retry, so only an explicit NOT_FOUND may
+  // produce it. Anything unreadable keeps the action blocked.
+  it.each(["success", "PENDING", "", "UNKNOWN"])(
+    "stays pending past the window for an unknown status %j",
+    async (status) => {
+      expect(await resolveUnconfirmedSubmission(serverReturning(status), submission, expiresAt + 10_000)).toBe(
+        "pending",
+      );
+    },
+  );
+
+  it.each([[{}], [null], [{ status: 42 }], ["SUCCESS"]])(
+    "stays pending past the window for a malformed response %j",
+    async (response) => {
+      const server = { getTransaction: vi.fn().mockResolvedValue(response) };
+      expect(await resolveUnconfirmedSubmission(server, submission, expiresAt + 10_000)).toBe("pending");
+    },
+  );
 });

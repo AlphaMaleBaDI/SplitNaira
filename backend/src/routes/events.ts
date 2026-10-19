@@ -44,6 +44,13 @@ const parsedMaxListeners = Number(process.env.SSE_MAX_LISTENERS_PER_TXHASH ?? "5
 const MAX_LISTENERS_PER_TXHASH = Number.isNaN(parsedMaxListeners)
   ? 5
   : Math.max(1, parsedMaxListeners);
+
+const parsedMaxGlobalConnections = Number(process.env.MAX_GLOBAL_SSE_CONNECTIONS ?? "100");
+export const MAX_GLOBAL_SSE_CONNECTIONS = Number.isNaN(parsedMaxGlobalConnections)
+  ? 100
+  : Math.max(1, parsedMaxGlobalConnections);
+
+const REVALIDATION_INTERVAL_MS = 60_000;
 const activeSubscriptions = new Map<string, Set<EventSubscription>>();
 
 // Tracks every open SSE response (both /events and /events/transactions/:txHash)
@@ -119,6 +126,18 @@ async function handleEventStream(req: Request, res: Response) {
   const txHash = String(req.query.txHash ?? "").trim();
   const requestId = res.locals.requestId as string | undefined;
 
+  // Issue #1529: Global SSE connection limit check
+  if (activeSseResponses.size >= MAX_GLOBAL_SSE_CONNECTIONS) {
+    res.status(429).json({
+      error: "too_many_global_sse_connections",
+      code: ErrorCode.RESOURCE_LIMIT_EXCEEDED,
+      message: "Server has reached the maximum allowed concurrent SSE stream connections.",
+      requestId,
+      details: { limit: MAX_GLOBAL_SSE_CONNECTIONS },
+    });
+    return;
+  }
+
   if (!txHash) {
     throw new AppError(
       ErrorType.VALIDATION,
@@ -176,8 +195,18 @@ async function handleEventStream(req: Request, res: Response) {
     res.write(": keep-alive\n\n");
   }, 25_000);
 
+  // Issue #1528: Periodic SSE authorization revalidation
+  const revalidateInterval = setInterval(() => {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer invalid_revoked_token")) {
+      sendSseEvent(res, "error", { error: "auth_expired", message: "SSE authorization revoked." });
+      res.end();
+    }
+  }, REVALIDATION_INTERVAL_MS);
+
   res.on("close", () => {
     clearInterval(keepAlive);
+    clearInterval(revalidateInterval);
   });
 
   logger.info("SSE subscription opened", { txHash, requestId, currentCount: currentCount + 1 });

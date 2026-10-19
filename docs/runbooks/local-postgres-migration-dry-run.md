@@ -101,6 +101,100 @@ inspection. It does not change application data outside that target. To stop
 the local service after the check, run `docker compose down`; do not add `-v`
 unless you also intend to remove the Compose database volume.
 
+## Migration timing benchmarks
+
+Before a release, run the full migration chain against a pre-seeded database
+and confirm each step completes within its published time budget.
+
+### Enable timing output
+
+Set `MIGRATION_TIMING=1` before the dry-run command. The script then emits a
+structured JSON line on stdout after `migration:run` completes:
+
+```bash
+export MIGRATION_DRY_RUN_DATABASE_URL='postgresql://splitnaira:splitnaira@localhost:5432/splitnaira_ci'
+export MIGRATION_DRY_RUN_ADMIN_DATABASE_URL='postgresql://splitnaira:splitnaira@localhost:5432/postgres'
+MIGRATION_TIMING=1 npm run migration:dry-run 2>&1 | tee migration-dry-run.log
+```
+
+The timing line has this shape:
+
+```json
+{"event":"migration_timing","step":"migration:run","durationMs":1234,"timestamp":"2026-01-01T00:00:00.000Z"}
+```
+
+You can extract it with:
+
+```bash
+grep '"event":"migration_timing"' migration-dry-run.log
+```
+
+### Published time budgets
+
+These limits are enforced by the automated benchmarks in
+`backend/src/__tests__/migration-timing.test.ts`:
+
+| Operation | Budget |
+|-----------|--------|
+| Single migration (one table / column / index) | 2 000 ms |
+| Full sequential migration chain from blank schema | 30 000 ms |
+| `pg_try_advisory_lock` (non-blocking check) | 500 ms |
+| Concurrent runner lock contention check | 200 ms |
+
+A migration that consistently approaches the single-migration budget on a
+lightly loaded local Postgres instance should be reviewed for a large table
+scan or missing `IF NOT EXISTS` guard before it ships.
+
+### Running the benchmark suite locally
+
+The benchmark suite (`migration-timing.test.ts`) requires a pre-migrated
+Postgres. Run the dry-run first to apply all migrations, then point
+`DATABASE_URL` at the same database:
+
+```bash
+# 1. Apply all migrations to the isolated target
+export MIGRATION_DRY_RUN_DATABASE_URL='postgresql://splitnaira:splitnaira@localhost:5432/splitnaira_ci'
+export MIGRATION_DRY_RUN_ADMIN_DATABASE_URL='postgresql://splitnaira:splitnaira@localhost:5432/postgres'
+npm run migration:dry-run
+
+# 2. Run the benchmark suite against the migrated database
+DATABASE_URL='postgresql://splitnaira:splitnaira@localhost:5432/splitnaira_ci' \
+  npm run test -w backend -- src/__tests__/migration-timing.test.ts
+```
+
+Without `DATABASE_URL` the suite skips all database-backed tests locally and
+will not fail. In CI (`CI=true`) a missing `DATABASE_URL` or failed connection
+causes the suite to fail immediately so the benchmark can never silently pass
+by skipping.
+
+### Advisory lock behaviour
+
+`migration:run` acquires a PostgreSQL advisory lock before applying any
+migrations to prevent two concurrent runners from applying the same migration
+twice. The benchmark suite verifies:
+
+- `pg_try_advisory_lock` returns within 500 ms (fast path, no wait).
+- A second concurrent runner's non-blocking attempt returns `false` within
+  200 ms while the first holds the lock.
+- The lock is re-acquirable after the first session releases it.
+
+If `pg_try_advisory_lock` takes longer than expected on a shared CI runner,
+check whether another process is holding an advisory lock with the same key or
+whether the Postgres server is under heavy load.
+
+### Financial invariants verified by the suite
+
+The benchmarks also assert that the two financial-safety guardrails installed
+by the migration chain remain in place on the migrated database:
+
+| Guardrail | Migration | What is checked |
+|-----------|-----------|----------------|
+| `CHK_transactions_amount_valid` | `AddFinancialAmountCheckConstraints1760000000010` | Constraint present; boundary valid amounts accepted; boundary invalid amounts rejected with `23514`. |
+| `trg_transactions_immutable` | `AddImmutableTransactionRecords1760000000008` | Trigger present; UPDATE of financial fields rejected with `23000`; UPDATE of `status` accepted; DELETE rejected. |
+
+These checks run inside rolled-back transactions so no data persists after the
+suite completes.
+
 ## Related
 
 - [Backend deployment](../backend-deploy.md)

@@ -65,6 +65,32 @@ rather than emitting a misleading header.
 `GET /health` (the backwards-compatibility alias for `GET /health/ready`) is
 the first registered deprecation.
 
+## Transaction pagination contract
+
+`GET /transactions/history` and `GET /transactions/recipient/:walletAddress`
+share one pagination contract (#1259):
+
+- **Stable order.** Rows are ordered by `(timestamp DESC, id DESC)`. `timestamp`
+  alone is not a total order, so `id` is the tie-breaker.
+- **Cursor.** A response with more rows carries `nextCursor`. Send it back as
+  `?cursor=<value>` to fetch the next page. The cursor is opaque (base64url of
+  `{ t, i }`) and is validated before it reaches SQL; a malformed value is
+  `400 VALIDATION_ERROR` with `details: { cursor: "invalid" }` and no query is
+  run.
+- **Page size.** `limit` is capped at 100; `101` is a `400`.
+- **Offset fallback.** `offset` remains supported for existing clients. When
+  both `cursor` and `offset` are sent, `cursor` wins — mixing them would make
+  the page depend on inserts that happened since the cursor was issued.
+- **`total`** always counts every row matching the filters, not just the rows
+  after the cursor.
+- **`hasMore`** is derived from a `limit + 1` probe, so a full last page is not
+  reported as having a next page.
+
+The response shape is documented in `docs/openapi.yaml`; the codec lives in
+`backend/src/lib/keyset-cursor.ts` and is pinned by
+`backend/src/__tests__/keyset-cursor.test.ts` and
+`backend/src/__tests__/transactions-pagination.test.ts`.
+
 ## Per-route rate limits
 
 Route groups have deliberately distinct budgets (auth, admin, read, write,
@@ -85,6 +111,32 @@ checks the responses against the generated OpenAPI document:
   the test), and
 - the unknown-route and validation-error envelopes match the documented shape
   and never leak stack traces.
+
+The representative public JSON success responses are checked against the
+top-level fields declared in OpenAPI. Admin and ops responses additionally use
+`withResponseValidation` at runtime. Public routes are currently contract
+tested rather than wrapped with that runtime middleware; this avoids adding a
+second response check where a route already owns a typed contract and makes
+the documented contract the shared source of truth. When adding a public JSON
+route, add a representative success response check and cover its error or
+boundary behavior in the route tests. Keep the schema test strict about
+unexpected top-level fields; any intentional additive fields must be explained
+and listed in `KNOWN_ADDITIVE_FIELDS` in `api-contract.test.ts`.
+
+Single-payload JSON validation intentionally does not apply to `GET /events`,
+`GET /events/transactions/:txHash`, or `GET /metrics`: these stream SSE or
+Prometheus text over an open connection. Validate event payloads where they
+are produced and preserve the documented stream content type and framing.
+
+## HTTP method allowlist
+
+Express dispatches only the verbs registered for a route. An unsupported verb
+at an otherwise known resource falls through to the same static 404 contract
+as an unknown path. Tests exercise unsupported verbs on write resources and
+assert the handler does not run or reflect request data. `HEAD` is supported
+as Express's bodyless equivalent of `GET`; `OPTIONS` is handled by the global
+CORS middleware as a preflight response and is not a 404. Keep these framework
+exceptions explicit when adding or changing method tests.
 
 Run it with:
 

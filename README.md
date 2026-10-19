@@ -302,6 +302,7 @@ npm run analyze
 - [Contract Setup](./docs/SOROBAN_SETUP.md)
 - [Contract Release & Upgrade](./docs/contract-release-and-upgrade-runbook.md)
 - [Backend CD](./docs/backend-deploy.md)
+- [Stellar RPC Response Validation](./docs/stellar-rpc-response-validation.md)
 - [API Docs](./docs/openapi.json)
 - [Mainnet Launch Runbook](./docs/runbooks/mainnet-launch.md)
 - [User Onboarding Runbook](./docs/runbooks/user-onboarding.md)

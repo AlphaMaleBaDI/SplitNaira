@@ -55,6 +55,14 @@ vi.mock("@/lib/wallet", () => {
     connectWallet: mocks.mockConnectWallet,
     signWithWallet: mocks.mockSignWithWallet,
     createSorobanRpcServer: mockRpc,
+    // Mirrors lib/soroban-transaction: only an accepted submission resolves.
+    sendSorobanTransaction: async (server: ReturnType<typeof mockRpc>, transaction: unknown) => {
+      const submitResponse = await server.sendTransaction(transaction);
+      if (submitResponse.status !== "PENDING" && submitResponse.status !== "DUPLICATE") {
+        throw new Error(submitResponse.errorResult?.toString() ?? "Transaction rejected.");
+      }
+      return { hash: submitResponse.hash as string };
+    },
     submitSorobanTransactionAndPoll: async (
       server: ReturnType<typeof mockRpc>,
       transaction: unknown,

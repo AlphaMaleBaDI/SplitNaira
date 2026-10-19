@@ -260,7 +260,7 @@ describe("User Onboarding — full lifecycle (#515)", () => {
   });
 
   describe("POST /users/login — error cases", () => {
-    it("returns 404 when user does not exist", async () => {
+    it("returns a generic 401 when user does not exist", async () => {
       findOneMock.mockResolvedValue(null);
       const app = createApp();
 
@@ -268,7 +268,7 @@ describe("User Onboarding — full lifecycle (#515)", () => {
         .post("/users/login")
         .send({ walletAddress: VALID_WALLET });
 
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(401);
     });
 
     it("returns 400 for invalid wallet address format", async () => {
