@@ -273,6 +273,61 @@ curl -fsS "$BACKEND_BASE/splits?limit=5"          # expect non-empty list
 curl -fsS "$BACKEND_BASE/transactions/history?limit=5" # expect prior records
 ```
 
+### 3.5 Automated record validation (`restore-drill`)
+
+The SQL in 3.3 only proves the tables are there. `restore-drill` proves the
+**records** are the same ones you backed up, and that they are still
+internally consistent. Run both halves for every drill.
+
+**At backup time, against the source database:** capture a baseline.
+
+```bash
+cd backend
+npm run restore-drill:capture -- drill/baseline-$(date +%F).json
+```
+
+The baseline stores, for each table, the row count and a SHA-256 checksum of
+every row (sorted by `id`). For `transactions` and `ledger_blocks` it also
+stores exact BigInt amount totals by `token|status` and by `type`. It contains
+no row contents and no wallet addresses, so you can attach it to the drill
+ticket.
+
+**After restoring (3.2), against the drill database:** validate.
+
+```bash
+cd backend
+RESTORE_DRILL_TARGET=restore \
+DATABASE_URL=postgresql://splitnaira:splitnaira@localhost:5433/splitnaira_drill \
+  npm run restore-drill:validate -- drill/baseline-YYYY-MM-DD.json --json > drill/report.json
+```
+
+The validation step:
+
+- Refuses to run unless `RESTORE_DRILL_TARGET=restore`, so it can't be
+  pointed at production by accident and recorded as a drill.
+- Is **read-only**. It only calls `find()` and never writes, migrates or
+  deletes anything.
+- Also runs the full relational audit (`audit:db-consistency`, see
+  [database-consistency-audit.md](../database-consistency-audit.md)) on the
+  restored data.
+
+Exit code `0` means the drill passed. `1` means a critical finding. `2` means a
+usage problem, a refused target or an invalid baseline.
+
+| Finding | Severity | Meaning / action |
+|---|---|---|
+| `table-missing` | critical | The table is absent or unreadable in the restore. The backup or restore is incomplete. |
+| `row-count-mismatch` | critical | Rows were lost (−N) or extra rows appeared (+N). Check that the dump and the baseline come from the same point in time. |
+| `checksum-mismatch` | critical | Same row count, but different contents. The data was modified or corrupted. |
+| `financial-total-mismatch` | critical | A `token\|status` or `type` amount total differs. **Treat it as a financial incident**: don't promote this restore. |
+| `invalid-amount` | critical | A non-integer amount can't be reconciled to the stroop. |
+| audit findings (`transaction-ledger-reconciliation`, `duplicate-*`, …) | as reported | The restored data breaks an invariant the app relies on. |
+| `table-unavailable-at-capture` / `table-not-in-baseline` | warning | The table wasn't verified. Re-capture the baseline with it included. |
+
+Record the drill's pass/fail result, the baseline file and `report.json` in
+the drill ticket. A drill only counts as passed when this step exits `0` *and*
+the 3.4 smoke checks pass.
+
 ## 4. Audit log & transaction record handling
 
 Audit logs and transaction records **must be preserved across any
