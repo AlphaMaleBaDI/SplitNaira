@@ -179,6 +179,32 @@ export function errorHandler(
     });
   }
 
+  // Issue #1260: PostgreSQL unique-constraint violation (SQLSTATE 23505).
+  // These are thrown by TypeORM when a concurrent INSERT races past an
+  // application-level check and hits the database index.  Map them to 409
+  // so clients and callers get a predictable, machine-readable conflict
+  // signal instead of an opaque 500.
+  //
+  // We match on the stable pg error code rather than message text because
+  // TypeORM wraps the error in its own QueryFailedError and the message
+  // format has varied across versions.
+  const pgError = err as { code?: unknown; message?: string };
+  if (pgError.code === "23505") {
+    logger.warn("Database unique constraint violation", {
+      requestId,
+      path: req.originalUrl,
+      method: req.method,
+      constraint: (err as { constraint?: string }).constraint,
+    });
+    return res.status(409).json({
+      error: "conflict",
+      code: "DUPLICATE_RESOURCE",
+      message: "A resource with this identifier already exists.",
+      requestId,
+      details: {},
+    });
+  }
+
   // RPC errors are expected, transient failure modes of talking to an
   // external dependency (Horizon/soroban-rpc), not bugs in this service.
   // Handling them here — before the generic "unhandled error" path below

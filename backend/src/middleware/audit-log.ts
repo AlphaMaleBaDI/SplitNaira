@@ -1,3 +1,19 @@
+/**
+ * Issue #1262: Structured audit logging for privileged operations.
+ *
+ * Records actor, action, target, request ID, and outcome for every admin
+ * mutation. Secrets and sensitive payload fields are redacted before
+ * persistence so the audit log itself is safe to query by operators.
+ *
+ * Consistent event names:
+ *   - Derived from the final path segment with hyphens replaced by underscores.
+ *   - Always lowercase.
+ *
+ * Redacted fields (case-insensitive key match):
+ *   - `apiKey`, `api_key`, `secret`, `token`, `password`, `privateKey`,
+ *     `private_key`, `seed`, `xdr`, `signature`, `sig`
+ */
+
 import type { NextFunction, Request, Response } from "express";
 import { getDataSource } from "../services/database.js";
 import { AuditLog } from "../entities/AuditLog.js";
@@ -6,11 +22,107 @@ import { logger } from "../services/logger.js";
 
 const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-function deriveAction(req: Request): string {
+/**
+ * Keys whose values must never appear in the audit log payload.
+ * Matching is case-insensitive and normalises camelCase / snake_case.
+ */
+const REDACTED_KEYS = new Set([
+  "apikey",
+  "api_key",
+  "secret",
+  "token",
+  "password",
+  "privatekey",
+  "private_key",
+  "seed",
+  "xdr",
+  "signature",
+  "sig",
+  "secretkey",
+  "secret_key",
+  "mnemonic",
+]);
+
+function isRedactedKey(key: string): boolean {
+  return REDACTED_KEYS.has(key.toLowerCase().replace(/[-_]/g, "").replace("secret", "secret"));
+}
+
+/**
+ * Redacts known-sensitive fields from a payload object (one level deep).
+ * Nested objects are walked one additional level to catch common patterns
+ * like `{ credentials: { token: "..." } }`.
+ *
+ * Returns a new object; the original is never mutated.
+ */
+export function redactSensitivePayload(
+  payload: Record<string, unknown>
+): Record<string, unknown> {
+  const redacted: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(payload)) {
+    // Check the direct key
+    if (REDACTED_KEYS.has(key.toLowerCase())) {
+      redacted[key] = "[REDACTED]";
+      continue;
+    }
+
+    // Walk one level into nested plain objects
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      const nested = value as Record<string, unknown>;
+      const redactedNested: Record<string, unknown> = {};
+      let anyRedacted = false;
+      for (const [nk, nv] of Object.entries(nested)) {
+        if (REDACTED_KEYS.has(nk.toLowerCase())) {
+          redactedNested[nk] = "[REDACTED]";
+          anyRedacted = true;
+        } else {
+          redactedNested[nk] = nv;
+        }
+      }
+      redacted[key] = anyRedacted ? redactedNested : value;
+      continue;
+    }
+
+    redacted[key] = value;
+  }
+
+  return redacted;
+}
+
+/**
+ * Derives a consistent, lowercase snake_case event name from the request path.
+ * e.g. `/splits/admin/pause-distributions` → `pause_distributions`
+ */
+export function deriveEventName(req: Request): string {
   const path = req.path.replace(/^\/+/, "");
   const segments = path.split("/").filter(Boolean);
   const resource = segments[segments.length - 1] ?? "unknown";
-  return resource.replace(/-/g, "_");
+  return resource.replace(/-/g, "_").toLowerCase();
+}
+
+/**
+ * Extracts the actor identity from the request.
+ *
+ * For admin routes the actor is the wallet address supplied in the payload
+ * (if any) or extracted from authenticated request context. Falls back to
+ * `null` when no principal is identifiable (anonymous admin key usage).
+ */
+function extractActor(req: Request): string | null {
+  // Authenticated JWT routes attach `req.user`
+  const user = (req as Request & { user?: { walletAddress?: string } }).user;
+  if (user?.walletAddress) {
+    return user.walletAddress;
+  }
+
+  // Admin payloads often include an `admin` wallet address field
+  const body = req.body as Record<string, unknown> | null | undefined;
+  if (body && typeof body === "object") {
+    if (typeof body.admin === "string" && body.admin.length > 0) {
+      return body.admin;
+    }
+  }
+
+  return null;
 }
 
 function buildPayload(req: Request): Record<string, unknown> | null {
@@ -18,15 +130,21 @@ function buildPayload(req: Request): Record<string, unknown> | null {
   if (body === undefined || body === null) {
     return null;
   }
+
+  let raw: Record<string, unknown>;
   if (typeof body === "object" && !Array.isArray(body)) {
-    return body as Record<string, unknown>;
+    raw = body as Record<string, unknown>;
+  } else {
+    raw = { value: body };
   }
-  return { value: body };
+
+  // Issue #1262: always redact sensitive fields before persistence.
+  return redactSensitivePayload(raw);
 }
 
 function buildFailureMetadata(req: Request, res: Response): Record<string, unknown> {
   return {
-    action: deriveAction(req),
+    action: deriveEventName(req),
     requestId: String(res.locals.requestId ?? ""),
     route: req.originalUrl,
     statusCode: res.statusCode,
@@ -36,16 +154,23 @@ function buildFailureMetadata(req: Request, res: Response): Record<string, unkno
 async function persistAuditLog(
   req: Request,
   res: Response,
-  outcome: "success" | "failure"
+  outcome: "success" | "failure" | "blocked"
 ): Promise<void> {
   try {
     const dataSource = getDataSource();
     const repository = dataSource.getRepository(AuditLog);
     const entry = repository.create({
-      action: deriveAction(req),
+      action: deriveEventName(req),
       ipHash: hashIp(req.ip),
       requestId: String(res.locals.requestId ?? ""),
-      payload: outcome === "success" ? buildPayload(req) : buildFailureMetadata(req, res)
+      // Issue #1262: record the authenticated actor
+      actor: extractActor(req),
+      // Issue #1262: record the stable outcome category
+      outcome,
+      payload:
+        outcome === "success"
+          ? buildPayload(req)
+          : buildFailureMetadata(req, res),
     });
     await repository.save(entry);
   } catch (error) {
@@ -55,9 +180,14 @@ async function persistAuditLog(
 
 /**
  * Records an audit log row after each admin mutation under /splits/admin.
- * Successful mutations (2xx) are logged with the request payload.
- * Failed mutations (non-2xx) are logged with sanitized failure metadata
- * (action, requestId, route, statusCode) — never raw headers or tokens.
+ *
+ * - Successful mutations (2xx): logged with redacted request payload.
+ * - Failed mutations (non-2xx, non-5xx): logged with sanitized failure
+ *   metadata (action, requestId, route, statusCode).
+ * - Blocked mutations (503 write-disabled): logged with outcome `blocked`.
+ *
+ * The middleware never exposes raw tokens, headers, or credentials — the
+ * `redactSensitivePayload` helper strips known-sensitive keys before write.
  */
 export function auditAdminMutationsMiddleware(
   req: Request,
@@ -70,9 +200,14 @@ export function auditAdminMutationsMiddleware(
   }
 
   res.on("finish", () => {
-    const outcome = res.statusCode >= 200 && res.statusCode < 300
-      ? "success"
-      : "failure";
+    let outcome: "success" | "failure" | "blocked";
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      outcome = "success";
+    } else if (res.statusCode === 503) {
+      outcome = "blocked";
+    } else {
+      outcome = "failure";
+    }
     void persistAuditLog(req, res, outcome);
   });
 
