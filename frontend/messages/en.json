@@ -31,6 +31,29 @@
       "wallet": "Wallet",
       "network": "Network"
     },
+    "walletAuthChallenge": {
+      "title": "Sign to verify your identity",
+      "description": "SplitNaira needs to confirm that you control this wallet. You are being asked to sign a short message, not approve a payment or transfer any funds.",
+      "notPaymentNotice": "This is not a payment.",
+      "notPaymentDetail": "No tokens will leave your wallet. Your signature only proves you own this address — it cannot authorise any transaction.",
+      "challengeValid": "Challenge valid for {seconds}s.",
+      "challengeExpiringSoon": "Challenge expires in {seconds}s — please sign soon.",
+      "challengeExpiredTitle": "This challenge has expired.",
+      "challengeExpiredDetail": "For your security, challenges are single-use and time-limited. Request a new one to continue.",
+      "signButton": "Sign to continue",
+      "waitingForWallet": "Waiting for wallet…",
+      "tryAgain": "Try again",
+      "startOver": "Start over",
+      "cancel": "Cancel",
+      "getNewChallenge": "Get new challenge",
+      "requestingChallenge": "Requesting new challenge…",
+      "rejectedTitle": "Signature cancelled.",
+      "rejectedDetail": "You dismissed the signing request in your wallet. No data was sent or stored. You can try again when you are ready.",
+      "errorTitle": "Signing failed.",
+      "errorDetail": "Something went wrong while requesting your signature. Please try again.",
+      "successTitle": "Identity verified.",
+      "footer": "This signature is only valid for this session and expires shortly. SplitNaira never stores your private key."
+    },
     "wizard": {
       "validation": {
         "projectIdRequired": "Project identifier is required.",

@@ -24,6 +24,21 @@ export class AuditLog {
   @Column({ name: "request_id", type: "varchar", length: 64 })
   requestId!: string;
 
+  /**
+   * Issue #1262: The authenticated actor (user wallet address or service
+   * identifier) that performed the privileged operation. Null for unauthenticated
+   * or system-level events where no principal is available.
+   */
+  @Column({ name: "actor", type: "varchar", length: 128, nullable: true })
+  actor!: string | null;
+
+  /**
+   * Issue #1262: Stable outcome label for the audited operation.
+   * One of: `success`, `failure`, `blocked`.
+   */
+  @Column({ name: "outcome", type: "varchar", length: 32, nullable: true })
+  outcome!: string | null;
+
   @Column({ type: "jsonb", nullable: true })
   payload!: Record<string, unknown> | null;
 }

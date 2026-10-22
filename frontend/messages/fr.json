@@ -31,6 +31,29 @@
       "wallet": "Wallet",
       "network": "Réseau"
     },
+    "walletAuthChallenge": {
+      "title": "Signer pour vérifier votre identité",
+      "description": "SplitNaira doit confirmer que vous contrôlez ce wallet. Il vous est demandé de signer un court message, et non d'approuver un paiement ou de transférer des fonds.",
+      "notPaymentNotice": "Ce n'est pas un paiement.",
+      "notPaymentDetail": "Aucun token ne quittera votre wallet. Votre signature prouve uniquement que vous possédez cette adresse — elle ne peut autoriser aucune transaction.",
+      "challengeValid": "Défi valide pendant {seconds}s.",
+      "challengeExpiringSoon": "Le défi expire dans {seconds}s — veuillez signer rapidement.",
+      "challengeExpiredTitle": "Ce défi a expiré.",
+      "challengeExpiredDetail": "Pour votre sécurité, les défis sont à usage unique et limités dans le temps. Demandez-en un nouveau pour continuer.",
+      "signButton": "Signer pour continuer",
+      "waitingForWallet": "En attente du wallet…",
+      "tryAgain": "Réessayer",
+      "startOver": "Recommencer",
+      "cancel": "Annuler",
+      "getNewChallenge": "Obtenir un nouveau défi",
+      "requestingChallenge": "Demande d'un nouveau défi…",
+      "rejectedTitle": "Signature annulée.",
+      "rejectedDetail": "Vous avez refusé la demande de signature dans votre wallet. Aucune donnée n'a été envoyée ou stockée. Vous pouvez réessayer quand vous le souhaitez.",
+      "errorTitle": "Échec de la signature.",
+      "errorDetail": "Une erreur s'est produite lors de la demande de signature. Veuillez réessayer.",
+      "successTitle": "Identité vérifiée.",
+      "footer": "Cette signature est uniquement valable pour cette session et expire prochainement. SplitNaira ne stocke jamais votre clé privée."
+    },
     "wizard": {
       "validation": {
         "projectIdRequired": "L'identifiant du projet est requis.",
