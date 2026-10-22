@@ -10,7 +10,7 @@ This fix addreesses GitHub Issue #292 (Security: Cross-Site Scripting (XSS) in S
 ### Documentation
 - Added `docs/contract-interface-diff-examples.md`, which gives reviewers worked breaking/non-breaking examples for `splitnaira.contract-interface.json` diffs. It is linked from the interface release checklist.
 - `docs/runbooks/stuck-payouts.md` now documents that `claim` is blocked by `pause_distributions`, including for fully distributed projects.
-
+- Add Horizon/Soroban RPC compatibility matrix and bounded smoke suite (#1499)
 ### Tests
 - Added `contracts/pause_claim_tests.rs`: claim-path coverage for fully distributed projects after an admin pause, before and after unpause, with deposits made during the pause, and with a re-pause after a partial claim.
 

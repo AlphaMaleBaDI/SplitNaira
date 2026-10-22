@@ -12,6 +12,7 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "test": "vitest run",
     "test:compat": "vitest run src/routes/splits.compatibility.test.ts",
+    "test:rpc-compat": "vitest run src/rpcCompat.test.ts",
     "test:integration": "vitest run src/__tests__/e2e-testnet.integration.test.ts",
     "test:shutdown": "vitest run src/__tests__/graceful-shutdown.integration.test.ts",
     "test:watch": "vitest --watch",
