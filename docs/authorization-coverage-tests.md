@@ -44,3 +44,61 @@ cargo test --manifest-path contracts/Cargo.toml --features testutils \
   permissionless-distribution guarantee (issue #865).
 - `failure_invariant_tests.rs` — rejected operations leave storage and
   balances untouched (issue #1486).
+
+## Backend resource routes: persona matrix
+
+`backend/src/routes/collaboration.authz-matrix.test.ts` sends a request from
+every persona to every collaboration resource route, through the real router
+and middleware chain. Contributors adding a route under `/collaboration` must
+add a row here and a matching `ROUTES` entry in that file.
+
+Run it with:
+
+```bash
+cd backend && npx vitest run src/routes/collaboration.authz-matrix.test.ts
+```
+
+Personas:
+
+- **anonymous:** no `X-Stellar-Address` header.
+- **malformed:** a header value that isn't a Stellar address.
+- **owner:** the project owner, as recorded in the project's stored collaboration record.
+- **admin / editor / viewer:** collaborators with those roles.
+- **unrelated:** a valid address with no role on the project.
+
+Roles always come from the stored record, never from the request body.
+
+| Route | anonymous | malformed | owner | admin | editor | viewer | unrelated |
+|---|---|---|---|---|---|---|---|
+| `POST /collaboration/projects/:projectId/delete` | 401 | 400 | **200** | 403 | 403 | 403 | 403 |
+| `POST /collaboration/projects/:projectId/invitations` | 401 | 400 | **201** | **201** | 403 | 403 | 403 |
+| `POST /collaboration/invitations/:invitationId/cancel`¹ | 401 | 400 | **200** | **200** | 403 | 403 | 403 |
+| `POST /collaboration/projects/:projectId/transfer-ownership` | 401 | 400 | **200** | 403 | 403 | 403 | 403 |
+| `GET /collaboration/permissions/matrix` (public) | 200 | 200 | 200 | 200 | 200 | 200 | 200 |
+| `POST /collaboration/invitations/accept` (token-gated)² | 200 | — | — | — | — | — | — |
+
+¹ In the test, the invitation was sent by the admin. Cancel is allowed for the
+inviter or the project owner (`forbidden_not_inviter` otherwise).
+² Holding the invitation token is the credential. The caller's identity isn't
+checked, by design.
+
+Boundary cases the suite also pins:
+
+- Body fields such as `role`, `owner`, `actor` and `inviterWalletAddress` are
+  ignored. A viewer who claims `role: "owner"` still gets a 403.
+- No cross-project access. The owner of one project gets 403
+  (`project_role_unknown`) on another project.
+- It fails closed. An unknown project, or a role authority that throws, gives a
+  403 and never a default role.
+- A collaborator listed without a role is treated as `viewer`. The owner stays
+  `owner` even if also listed with a lower role.
+- A header with surrounding whitespace counts as the same identity. A
+  lower-cased address is rejected (400) rather than matched.
+- After a transfer, the previous owner loses the right to transfer again. A
+  denied cancel leaves the invitation `pending`.
+
+This suite adds route-level coverage only. It doesn't change any guard:
+`requireStellarAddress`, `createProjectPermissionMiddleware` and the
+service-level owner and inviter checks are exercised as they are.
+`collaboration.test.ts` (happy paths) and `permissions-enforcement.test.ts`
+(middleware unit tests) are unchanged.

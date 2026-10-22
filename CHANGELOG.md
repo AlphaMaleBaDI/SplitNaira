@@ -28,6 +28,8 @@ This fix addresses GitHub Issue #292 (Security: Cross-Site Scripting (XSS) in Sp
 - Owner-gated split mutations (`lock`, `collaborators`, `metadata`) now verify the requested `owner` against on-chain project state before building unsigned XDR; non-owners get `401 UNAUTHORIZED` instead of a transaction the contract would reject after signing (closes #1092). See `docs/wallet-signing-threat-model.md`.
 
 ### Added
+- Backend: route × persona authorization matrix tests for the collaboration resource routes. They cover anonymous, malformed, owner, admin, editor, viewer and unrelated callers, plus cross-project, fail-closed and body-spoofing boundaries (`backend/src/routes/collaboration.authz-matrix.test.ts`). See `docs/authorization-coverage-tests.md`.
+- Backend: a read-only restore drill (`npm run restore-drill:capture` / `restore-drill:validate`). It checks a restored database against a baseline captured at backup time: row counts, per-table checksums and exact financial totals. It also runs the existing consistency audit on the restored data. See `docs/runbooks/postgres-backup-restore.md` § 3.5.
 - Contract event integration contract: `contracts/interface/events.contract.json` is a versioned wire-shape snapshot of all 17 events. `npm run check:events` checks it in CI against `events.rs`, and on PRs against the base branch's snapshot. Breaking changes need a MAJOR bump (`npm run events:update -- --allow-breaking`). See `docs/contract-events.md#compatibility-policy`.
 - Prior-state fixture tests (`contracts/prior_state_fixture_tests.rs`) that run today's contract against v1 (flat index), v2 (pre-accounting-cache) and v3 (mixed index) storage layouts.
 - Release automation workflow for draft GitHub Releases on `v0.x.y` tag pushes.
